@@ -76,6 +76,9 @@ class ModelClient:
             group.algorithm = self.supported_algos.get_by_model_template(
                 model_template_id=group.model_template_id
             )
+            for model in group.models:
+                # set the model storage id, to link models to their parent group
+                model.model_storage_id = group.id
         return model_groups
 
     def get_latest_model_for_all_model_groups(self) -> List[Model]:
@@ -104,11 +107,7 @@ class ModelClient:
         """
         model_groups = self.get_all_model_groups()
         return next(
-            (
-                group
-                for group in model_groups
-                if group.algorithm.algorithm_name == algorithm_name
-            ),
+            (group for group in model_groups if group.algorithm.name == algorithm_name),
             None,
         )
 
@@ -321,7 +320,7 @@ class ModelClient:
             if isinstance(algorithm, str):
                 algorithm_name = algorithm
             elif isinstance(algorithm, Algorithm):
-                algorithm_name = algorithm.algorithm_name
+                algorithm_name = algorithm.name
             else:
                 raise ValueError(
                     f"Invalid type {type(algorithm)}. Argument `algorithm` must be "
@@ -333,7 +332,7 @@ class ModelClient:
             )
         # Now we make sure that the algorithm is supported in the project
         algorithms_supported_in_the_project = {
-            algorithm.algorithm_name
+            algorithm.name
             for task in self.project.get_trainable_tasks()
             for algorithm in self.supported_algos.get_by_task_type(task.type)
         }
@@ -522,7 +521,7 @@ class ModelClient:
                 f"Cannot get model for job `{job.description}`. This job does not "
                 f"belong to the project managed by this ModelClient instance."
             )
-        if job.status.state != JobState.FINISHED:
+        if job.state != JobState.FINISHED:
             raise ValueError(
                 f"Job `{job.description}` is not finished yet, unable to retrieve "
                 f"model for the job. Please wait until job is finished"
@@ -640,9 +639,8 @@ class ModelClient:
         response = self.session.get_rest_response(
             url=optimize_model_url, method="POST", data=payload
         )
-        job_id = response["job_ids"][0]
         job = get_job_with_timeout(
-            job_id=job_id,
+            job_id=response["job_id"],
             session=self.session,
             workspace_id=self.workspace_id,
             job_type="optimization",

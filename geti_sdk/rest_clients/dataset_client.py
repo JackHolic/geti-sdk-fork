@@ -37,7 +37,7 @@ class DatasetClient:
         :param name: Name of the dataset to create
         :return: The created dataset
         """
-        request_data = {"name": name, "use_for_training": False}
+        request_data = {"name": name}
         response = self.session.get_rest_response(
             url=self.base_url,
             method="POST",

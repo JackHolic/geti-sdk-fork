@@ -101,17 +101,30 @@ class BaseAnnotationClient:
         """
         if media_type == Image:
             media_name = "images"
+            single_media_name = "image"
         elif media_type == Video:
             media_name = "videos"
+            single_media_name = "video"
         else:
             raise ValueError(f"Invalid media type specified: {media_type}.")
-        get_media_url = (
+
+        url = (
             f"workspaces/{self.workspace_id}/projects/{self._project.id}"
-            f"/datasets/{dataset.id}/media/"
-            f"{media_name}?top=500"
+            f"/datasets/{dataset.id}/media:query?top=500"
         )
-        response = self.session.get_rest_response(url=get_media_url, method="GET")
-        total_number_of_media: int = response["media_count"][media_name]
+        data = {
+            "condition": "and",
+            "rules": [
+                {
+                    "field": "MEDIA_TYPE",
+                    "operator": "EQUAL",
+                    "value": single_media_name,
+                }
+            ],
+        }
+        response = self.session.get_rest_response(url=url, method="POST", data=data)
+        total_number_of_media: int = response[f"total_matched_{media_name}"]
+
         raw_media_list: List[Dict[str, Any]] = []
         while len(raw_media_list) < total_number_of_media:
             for media_item_dict in response["media"]:
@@ -352,9 +365,13 @@ class BaseAnnotationClient:
                 return None
             else:
                 raise error
-        return self.annotation_scene_from_rest_response(
+        annotation_scene = self.annotation_scene_from_rest_response(
             response, media_item.media_information
         )
+        annotation_scene.resolve_label_names_and_colors(
+            labels=self._project.get_all_labels()
+        )
+        return annotation_scene
 
     def _read_2d_media_annotation_from_source(
         self,

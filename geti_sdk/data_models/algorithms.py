@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 import attr
 
-from geti_sdk.data_models.enums import Domain, TaskType
+from geti_sdk.data_models.enums import TaskType
 from geti_sdk.data_models.utils import str_to_optional_enum_converter
 
 from .utils import attr_value_serializer, remove_null_fields
@@ -29,31 +29,18 @@ class Algorithm:
     Representation of a supported algorithm on the Intel® Geti™ platform.
     """
 
-    algorithm_name: str
     model_size: str
     model_template_id: str
     gigaflops: float
+    name: Optional[str] = None
     summary: Optional[str] = None
-    domain: Optional[str] = attr.field(
-        default=None, converter=str_to_optional_enum_converter(Domain)
-    )
-    # `domain` is deprecated in SC1.1, replaced by task_type
     task_type: Optional[str] = attr.field(
         default=None, converter=str_to_optional_enum_converter(TaskType)
     )
     supports_auto_hpo: Optional[bool] = None
-    recommended_choice: Optional[bool] = None  # Added in Geti v1.9
+    default_algorithm: Optional[bool] = None  # Added in Geti v1.16
     performance_category: Optional[str] = None  # Added in Geti v1.9
     lifecycle_stage: Optional[str] = None  # Added in Geti v1.9
-
-    def __attrs_post_init__(self):
-        """
-        Convert domain to task type for backward compatibility with earlier versions of
-        the Intel® Geti™ platform
-        """
-        if self.domain is not None and self.task_type is None:
-            self.task_type = TaskType.from_domain(self.domain)
-            self.domain = None
 
     def to_dict(self) -> Dict[str, Any]:
         """

@@ -35,7 +35,8 @@ class TaskPerformance:
     """
     Task Performance metrics in Intel® Geti™.
 
-    :var task_node_id: Overall score of the project or model
+    :var task_id: Unique ID of the task to which this Performance metric
+        applies.
     :var score: Score of the project or model for each task
     :var local_score: Accuracy of the model or project with respect to object
         localization for each task
@@ -43,7 +44,7 @@ class TaskPerformance:
         classification of the full image for each task
     """
 
-    task_node_id: Optional[str] = None
+    task_id: Optional[str] = None
     score: Optional[Score] = None
     local_score: Optional[Score] = None
     global_score: Optional[Score] = None
