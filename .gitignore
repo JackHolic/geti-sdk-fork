@@ -52,3 +52,6 @@ dist
 /tests/artifacts
 /tests/htmlcov/
 /tests/report*
+
+# Run
+/runs/*
