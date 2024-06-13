@@ -55,3 +55,5 @@ dist
 
 # Run
 /runs/*
+*.mp4
+/deployment
