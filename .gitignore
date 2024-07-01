@@ -57,3 +57,6 @@ dist
 
 deployment/
 runs/
+
+dependencies/
+requirements.txt
