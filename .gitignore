@@ -57,3 +57,5 @@ dist
 /runs/*
 *.mp4
 /deployment
+/dependencies
+requirements.txt
