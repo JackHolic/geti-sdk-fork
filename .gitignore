@@ -61,3 +61,6 @@ runs/
 dependencies/
 requirements.txt
 model/
+
+detect.py
+Geti.ipynb
