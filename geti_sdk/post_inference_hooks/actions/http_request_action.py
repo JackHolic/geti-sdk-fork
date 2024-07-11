@@ -47,9 +47,14 @@ class HttpRequestAction(PostInferenceAction):
 
         self.url = url
         self.method = method
+
+        if headers is None:
+            headers = {}
         self.headers = headers
 
         self.include_data = include_prediction_data and method == "POST"
+        if self.include_data:
+            self.headers.update({"Content-Type": "application/json"})
 
         self._repr_info_ = (
             f"url=`{url}`, "
@@ -82,6 +87,6 @@ class HttpRequestAction(PostInferenceAction):
             data = prediction_dict
 
         requests.request(
-            method=self.method, url=self.url, headers=self.headers, data=data
+            method=self.method, url=self.url, headers=self.headers, json=data
         )
         self.log_function(f"HTTP {self.method} request send to `{self.url}`.")

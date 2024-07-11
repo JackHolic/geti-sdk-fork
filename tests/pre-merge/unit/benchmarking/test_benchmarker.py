@@ -59,7 +59,9 @@ class TestBenchmarker:
         )
 
         # Assert
-        mock_get_project_by_name.assert_called_once_with(project_name=project_name)
+        mock_get_project_by_name.assert_called_once_with(
+            project_name=project_name, project_id=None
+        )
         mocked_model_client.assert_called_once()
         mocked_training_client.assert_called_once()
         assert benchmarker._is_single_task
@@ -118,7 +120,9 @@ class TestBenchmarker:
         )
 
         # Assert
-        mock_get_project_by_name.assert_called_once_with(project_name=project_name)
+        mock_get_project_by_name.assert_called_once_with(
+            project_name=project_name, project_id=None
+        )
         mock_image_client_get_all.assert_called_once()
         mocked_model_client.assert_called_once()
         model_client_object_mock.get_all_active_models.assert_called_once()
@@ -353,8 +357,8 @@ class TestBenchmarker:
         _ = mocker.patch(
             "geti_sdk.benchmarking.benchmarker.cv2.putText",
         )
-        mock_show_image_with_annotation_scene = mocker.patch(
-            "geti_sdk.benchmarking.benchmarker.show_image_with_annotation_scene",
+        mock_visualizer_draw = mocker.patch(
+            "geti_sdk.benchmarking.benchmarker.Visualizer.draw",
             return_value=mock_image,
         )
         mock_pad_image_and_put_caption = mocker.patch(
@@ -389,7 +393,7 @@ class TestBenchmarker:
             mock_image
         )
         assert (
-            mock_show_image_with_annotation_scene.call_count
+            mock_visualizer_draw.call_count
             == mock_pad_image_and_put_caption.call_count
             == (
                 # Calls for deployments + online prediction call
