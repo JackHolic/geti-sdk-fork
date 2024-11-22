@@ -23,7 +23,7 @@ as :py:class:`~geti_sdk.data_models.annotation_scene.AnnotationScene`,
 :py:class:`~geti_sdk.data_models.model.Model` and many more.
 
 When interacting with the GETi cluster through the
-:py:class:`geti_sdk.sc_rest_client.Geti` or the
+:py:class:`geti_sdk.geti.Geti` or the
 :py:mod:`~geti_sdk.rest_clients`, all entities retrieved from the cluster will be
 deserialized into the data models defined in this package.
 
@@ -45,6 +45,13 @@ Project-related entities
    :undoc-members:
 
 .. automodule:: geti_sdk.data_models.project
+   :members:
+   :undoc-members:
+
+Credit System-related entities
+++++++++++++++++++++++++
+
+.. automodule:: geti_sdk.data_models.credit_system
    :members:
    :undoc-members:
 
@@ -169,6 +176,8 @@ from .configuration import (
     GlobalConfiguration,
     TaskConfiguration,
 )
+from .credit_system import CreditAccount, CreditBalance, Subscription
+from .dataset import Dataset, Subset, TrainingDatasetStatistics
 from .enums import AnnotationKind, MediaType, TaskType
 from .job import Job
 from .label import Label, ScoredLabel
@@ -177,7 +186,7 @@ from .model import Model, OptimizedModel
 from .model_group import ModelGroup, ModelSummary
 from .performance import Performance
 from .predictions import Prediction
-from .project import Dataset, Pipeline, Project
+from .project import Pipeline, Project
 from .status import ProjectStatus
 from .task import Task
 from .test_result import Score, TestResult
@@ -190,6 +199,7 @@ __all__ = [
     "Label",
     "Task",
     "Pipeline",
+    "Dataset",
     "Image",
     "Video",
     "MediaItem",
@@ -212,8 +222,12 @@ __all__ = [
     "ProjectStatus",
     "Job",
     "CodeDeploymentInformation",
-    "Dataset",
     "TestResult",
     "Score",
     "User",
+    "CreditAccount",
+    "CreditBalance",
+    "Subscription",
+    "Subset",
+    "TrainingDatasetStatistics",
 ]

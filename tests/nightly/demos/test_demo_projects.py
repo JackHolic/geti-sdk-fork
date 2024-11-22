@@ -69,7 +69,7 @@ class TestDemoProjects:
         ids=[
             "Detection",
             "Classification",
-            "Anomaly classification",
+            "Anomaly",
             "Segmentation",
             "Detection to classification",
             "Detection to segmentation",
@@ -155,12 +155,12 @@ class TestDemoProjects:
         # Case 2: Project does not exist and name does not not match the default
         # example project name. ValueError should be raised
         non_existing_project_name = f"{PROJECT_PREFIX}_this_project_does_not_exist"
-        if (
-            fxt_project_client_no_vcr.get_project_by_name(non_existing_project_name)
-            is not None
-        ):
+        any_project = fxt_project_client_no_vcr.get_project_by_name(
+            non_existing_project_name
+        )
+        if any_project is not None:
             force_delete_project(
-                project_name=non_existing_project_name,
+                project=any_project,
                 project_client=fxt_project_client_no_vcr,
             )
         assert non_existing_project_name not in [

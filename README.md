@@ -1,8 +1,8 @@
 <div align="center">
 
 [![python](https://img.shields.io/badge/python-3.9%2B-green)]()
-[![openvino](https://img.shields.io/badge/openvino-2023.2.0-purple)](https://github.com/openvinotoolkit/openvino)
-![Intel Geti](https://img.shields.io/badge/Intel%C2%AE%20Geti%E2%84%A2-1.5%2B-blue?link=https%3A%2F%2Fgeti.intel.com%2F)
+[![openvino](https://img.shields.io/badge/openvino-2023.2.0%2B-purple)](https://github.com/openvinotoolkit/openvino)
+![Intel Geti](https://img.shields.io/badge/Intel%C2%AE%20Geti%E2%84%A2-1.14%2B-blue?link=https%3A%2F%2Fgeti.intel.com%2F)
 
 ![Pre-merge Tests Status](https://img.shields.io/github/actions/workflow/status/openvinotoolkit/geti-sdk/pre-merge-tests.yml?label=pre-merge%20tests&link=https%3A%2F%2Fgithub.com%2Fopenvinotoolkit%2Fgeti-sdk%2Factions%2Fworkflows%2Fpre-merge-tests.yml)
 ![Nightly Tests [Geti latest] Status](https://img.shields.io/github/actions/workflow/status/openvinotoolkit/geti-sdk/nightly-tests-geti-latest.yaml?label=nightly%20tests%20%5BGeti%20latest%5D&link=https%3A%2F%2Fgithub.com%2Fopenvinotoolkit%2Fgeti-sdk%2Factions%2Fworkflows%2Fnightly-tests-geti-latest.yaml)
@@ -42,7 +42,7 @@ feeling for use cases for the package.
 
 ## Installation
 Using an environment manager such as
-[Anaconda](https://www.anaconda.com/products/individual) or
+[miniforge](https://github.com/conda-forge/miniforge) or
 [venv](https://docs.python.org/3/library/venv.html) to create a new
 Python environment before installing the Intel® Geti™ SDK and its requirements is
 highly recommended.
@@ -186,7 +186,7 @@ Instantiating the `Geti` class will establish the connection and perform authent
     host="https://your_server_hostname_or_ip_address", token="your_personal_access_token"
   )
 
-  geti.download_project(project_name="dummy_project")
+  geti.download_project_data(project_name="dummy_project")
   ```
 
   Here, it is assumed that the project with name 'dummy_project' exists on the cluster.
@@ -223,7 +223,7 @@ Instantiating the `Geti` class will establish the connection and perform authent
     host="https://your_server_hostname_or_ip_address", token="your_personal_access_token"
   )
 
-  geti.upload_project(target_folder="dummy_project")
+  geti.upload_project_data(target_folder="dummy_project")
   ```
 
   The parameter `target_folder` must be a valid path to the directory holding the
@@ -301,10 +301,10 @@ the screenshot below).
 ## High level API reference
 The `Geti` class provides the following methods:
 
-- `download_project` -- Downloads a project by project name.
+- `download_project_data` -- Downloads a project by project name (Geti-SDK representation), returns an interactive object.
 
 
-- `upload_project` -- Uploads project from a folder.
+- `upload_project_data` -- Uploads project (Geti-SDK representation) from a folder.
 
 
 - `download_all_projects` -- Downloads all projects found on the server.
@@ -313,6 +313,18 @@ The `Geti` class provides the following methods:
 - `upload_all_projects` -- Uploads all projects found in a specified folder to the
   server.
 
+- `export_project` -- Exports a project to an archive on disk. This method is useful for
+  creating a backup of a project, or for migrating a project to a different cluster.
+
+- `import_project` -- Imports a project from an archive on disk. This method is useful for
+  restoring a project from a backup, or for migrating a project to a different cluster.
+
+- `export_dataset` -- Exports a dataset to an archive on disk. This method is useful for
+  creating a backup of a dataset, or for migrating a dataset to a different cluster.
+
+- `import_dataset` -- Imports a dataset from an archive on disk. A new project will
+  be created for the dataset. This method is useful for restoring a project from a dataset
+  backup, or for migrating a dataset to a different cluster.
 
 - `upload_and_predict_image` -- Uploads a single image to an existing project on the
   server, and requests a prediction for that image. Optionally, the prediction can
@@ -427,5 +439,5 @@ docker run --rm -ti -v $(pwd):/app geti-sdk:latest /bin/bash
 
 - Model upload
 - Prediction upload
-- Exporting datasets to COCO/YOLO/VOC format: For this, you can use the export
+- Importing datasets to an existing project: For this, you can use the import
   functionality from the Intel® Geti™ user interface instead.

@@ -17,6 +17,8 @@ import logging
 import os
 from typing import List, Optional, TypeVar, Union
 
+from requests import Response
+
 from geti_sdk.data_models import (
     Algorithm,
     Job,
@@ -59,15 +61,7 @@ class ModelClient:
         :return: List of model groups in the project
         """
         response = self.session.get_rest_response(url=self.base_url, method="GET")
-        if self.session.version.is_sc_1_1 or self.session.version.is_sc_mvp:
-            # The API is not fully consistent here, depending on exact release.
-            # Response may either be a dict or a list
-            try:
-                response_array = response["items"]
-            except TypeError:
-                response_array = response
-        else:
-            response_array = response["model_groups"]
+        response_array = response["model_groups"]
         model_groups = [
             ModelRESTConverter.model_group_from_dict(group) for group in response_array
         ]
@@ -512,10 +506,7 @@ class ModelClient:
         """
         if check_status:
             job.update(self.session)
-        if self.session.version.is_sc_mvp or self.session.version.is_sc_1_1:
-            job_pid = job.project_id
-        else:
-            job_pid = job.metadata.project.id
+        job_pid = job.metadata.project.id
         if job_pid != self.project.id:
             raise ValueError(
                 f"Cannot get model for job `{job.description}`. This job does not "
@@ -646,6 +637,33 @@ class ModelClient:
             job_type="optimization",
         )
         return job
+
+    def purge_model(self, model: Union[Model, ModelSummary]) -> None:
+        """
+        Purge the model from the Intel® Geti™ server.
+
+        This will permanently delete all the files related to the model including base model weights,
+        optimized model weights and exportable code for the Intel® Geti™ server.
+
+        :param model: Model to archive. Only base models are accepted, not optimized models.
+            Note: the model must not be the latest in the model group or be the active model.
+        :raises ValueError: If the model does not have a base_url, meaning it cannot be purged
+            from the remote server.
+        """
+        model = self.update_model_detail(model)
+        if model.base_url is None:
+            raise ValueError(
+                f"Model {model.name} does not have a base_url. Unable to purge the model."
+            )
+        purge_model_url = model.base_url + ":purge"
+        response = self.session.get_rest_response(
+            url=purge_model_url,
+            method="POST",
+        )
+        if type(response) is Response and response.status_code == 204:
+            logging.info(f"Model {model.name} was successfully purged.")
+        else:
+            logging.error(f"Failed to purge model {model.name}.")
 
     def monitor_job(self, job: Job, timeout: int = 10000, interval: int = 15) -> Job:
         """

@@ -15,7 +15,7 @@
 import copy
 import logging
 from pprint import pformat
-from typing import Any, ClassVar, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, ClassVar, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import attr
 import cv2
@@ -311,6 +311,17 @@ class AnnotationScene:
             labels.update(annotation.labels)
         return list(labels)
 
+    def get_label_names(self) -> List[str]:
+        """
+        Return a list with the unique label names in the annotation scene.
+
+        :return: List of label names
+        """
+        label_names: Set[str] = set()
+        for label in self.get_labels():
+            label_names.update([label.name])
+        return list(label_names)
+
     def apply_identifier(
         self, media_identifier: Union[ImageIdentifier, VideoFrameIdentifier]
     ) -> "AnnotationScene":
@@ -352,6 +363,31 @@ class AnnotationScene:
             annotations.append(annotation.map_labels(labels=labels))
         return AnnotationScene(
             annotations=annotations,
+            media_identifier=self.media_identifier,
+            modified=self.modified,
+        )
+
+    def filter_annotations(
+        self, labels: Sequence[Union[Label, ScoredLabel, str]]
+    ) -> "AnnotationScene":
+        """
+        Filter annotations in the scene to only include labels that are present in the
+        provided list of labels.
+
+        :param labels: List of labels or label names to filter the scene with
+        :return: AnnotationScene with filtered annotations
+        """
+        label_names_to_keep = {
+            label if type(label) is str else label.name for label in labels
+        }
+        filtered_annotations: List[Annotation] = []
+        for annotation in self.annotations:
+            for label_name in annotation.label_names:
+                if label_name in label_names_to_keep:
+                    filtered_annotations.append(annotation)
+                    break
+        return AnnotationScene(
+            annotations=filtered_annotations,
             media_identifier=self.media_identifier,
             modified=self.modified,
         )

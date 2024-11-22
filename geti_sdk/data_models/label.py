@@ -114,7 +114,9 @@ class ScoredLabel:
 
     _identifier_fields: ClassVar[List[str]] = ["id"]
 
-    probability: float
+    probability: float = attr.field(converter=float)  # float converter here to make
+    # sure we're storing probability
+    # as a float64 dtype
     name: Optional[str] = None
     color: Optional[str] = None
     id: Optional[str] = None
@@ -139,6 +141,25 @@ class ScoredLabel:
         :param probability: probability score for the label
         :return: ScoredLabel instance corresponding to `label` and `probability`
         """
+        probability = 0 if label.is_empty else probability
         return ScoredLabel(
             name=label.name, probability=probability, color=label.color, id=label.id
         )
+
+    def __key(self) -> Tuple[str, str]:
+        """
+        Return a tuple representing the key of the ScoredLabel.
+
+        The key is a tuple containing the name and color of the scored label.
+
+        :return: A tuple representing the key of the label.
+        """
+        return (self.name, self.color)
+
+    def __hash__(self) -> int:
+        """
+        Calculate the hash value of the object.
+
+        :return: The hash value of the object.
+        """
+        return hash(self.__key())

@@ -11,18 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions
 # and limitations under the License.
-
-
+import atexit
 import os
+import tempfile
 from datetime import datetime
 from typing import Optional, Sequence, Union
 
 import cv2
 import numpy as np
 
-from geti_sdk.data_models import MediaType, Video
+from geti_sdk.data_models import Dataset, MediaType, Video
 from geti_sdk.data_models.containers import MediaList
-from geti_sdk.data_models.project import Dataset
 from geti_sdk.http_session import GetiRequestException
 from geti_sdk.rest_converters import MediaRESTConverter
 
@@ -80,7 +79,12 @@ class VideoClient(BaseMediaClient[Video]):
                     f"shape {video.shape}"
                 ) from error
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            video_path = f"temp_video_{timestamp}.avi"
+            video_file = tempfile.NamedTemporaryFile(
+                prefix="geti-sdk_temp_video_", suffix=f"_{timestamp}.avi", delete=False
+            )
+            # Close the file, opencv will open it again from the path
+            video_file.close()
+            video_path = video_file.name
             out = cv2.VideoWriter(
                 video_path,
                 cv2.VideoWriter_fourcc("M", "J", "P", "G"),
@@ -98,13 +102,15 @@ class VideoClient(BaseMediaClient[Video]):
         uploaded_video = MediaRESTConverter.from_dict(
             input_dict=video_dict, media_type=Video
         )
-        # Clean up temp file
+        uploaded_video._data = video_path
         if temporary_file_created:
-            # We do not keep the video file in case of uploading a numpy array representation.
-            # The intuition is that the user is responsible for managing the original video.
-            os.remove(video_path)
-        else:
-            uploaded_video._data = video_path
+            uploaded_video._needs_tempfile_deletion = True
+
+            # Register cleanup function on system exit to ensure __del__ gets called
+            def clean_temp_video():
+                uploaded_video.__del__()
+
+            atexit.register(clean_temp_video)
         return uploaded_video
 
     def upload_folder(
@@ -117,7 +123,7 @@ class VideoClient(BaseMediaClient[Video]):
     ) -> MediaList[Video]:
         """
         Upload all videos in a folder to the project. Returns the mapping of video
-        filename to the unique ID assigned by Sonoma Creek.
+        filename to the unique ID assigned by Intel Geti.
 
         :param path_to_folder: Folder with videos to upload
         :param n_videos: Number of videos to upload from folder
@@ -143,6 +149,7 @@ class VideoClient(BaseMediaClient[Video]):
         path_to_folder: str,
         append_video_uid: bool = False,
         max_threads: int = 10,
+        dataset: Optional[Dataset] = None,
     ) -> None:
         """
         Download all videos in a project to a folder on the local disk.
@@ -155,9 +162,14 @@ class VideoClient(BaseMediaClient[Video]):
             downloaded. Otherwise videos with the same name will be skipped.
         :param max_threads: Maximum number of threads to use for downloading. Defaults to 10.
             Set to -1 to use all available threads.
+        :param dataset: Dataset from which to download the videos. If no dataset is
+            passed, videos from all datasets are downloaded.
         """
         self._download_all(
-            path_to_folder, append_media_uid=append_video_uid, max_threads=max_threads
+            path_to_folder,
+            append_media_uid=append_video_uid,
+            max_threads=max_threads,
+            dataset=dataset,
         )
 
     def delete_videos(self, videos: Sequence[Video]) -> bool:

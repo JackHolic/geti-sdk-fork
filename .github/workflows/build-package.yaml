@@ -6,6 +6,9 @@ on:
       enable_dev_dependencies:
         required: false
         type: string
+      runner:
+        required: true
+        type: string
     secrets:
       PYPI_USER:
         required: true
@@ -13,14 +16,11 @@ on:
         required: true
       PYPI_HOST:
         required: true
-      PYPI_PORT:
-        required: false
 
 env:
   PYPI_USER: ${{ secrets.PYPI_USER }}
   PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
   PYPI_HOST: ${{ secrets.PYPI_HOST }}
-  PYPI_PORT: ${{ secrets.PYPI_PORT }}
   ENABLE_DEV_DEPENDENCIES: ${{ inputs.enable_dev_dependencies }}
 
 permissions:
@@ -28,13 +28,18 @@ permissions:
 
 jobs:
   build_sdk:
-    runs-on: [self-hosted, sdk-runner]
+    runs-on: ${{ inputs.runner }}
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@a4aa98b93cab29d9b1101a6143fb8bce00e2eac4 # v2.7.1
+        with:
+          egress-policy: audit
+
       - name: Checkout code with caching for Git LFS
-        uses: nschloe/action-cached-lfs-checkout@v1.2.0
+        uses: nschloe/action-cached-lfs-checkout@b45b5731560fe7acf2d15c536bc8aef4f71c885e # v1.2.0
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@65d7f2d534ac1bc67fcd62888c5f4f3d2cb2b236 # v4.7.1
         with:
           python-version: 3.9
 
@@ -59,7 +64,7 @@ jobs:
 
       - name: Upload wheel and source files as github artifact
         # Publish the built wheel and source tarball to github
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32 # v3.1.3
         if: ${{ always() }}
         with:
           name: geti_sdk
@@ -67,11 +72,7 @@ jobs:
 
       - name: Publish SDK package to pypi
         run: |
-          if [[ $PYPI_HOST != "pypi.org" && $PYPI_HOST != "test.pypi.org" ]]; then
-            export no_proxy=$PYPI_HOST
-            export REPOSITORY_URL=http://$PYPI_HOST:$PYPI_PORT
-            twine upload --repository-url $REPOSITORY_URL dist/* -u $PYPI_USER -p $PYPI_PASSWORD
-          elif [[ $PYPI_HOST = "test.pypi.org" ]]; then
+          if [[ $PYPI_HOST = "test.pypi.org" ]]; then
             twine upload -r testpypi dist/* -u $PYPI_USER -p $PYPI_PASSWORD
           else
             twine upload dist/* -u $PYPI_USER -p $PYPI_PASSWORD

@@ -14,6 +14,8 @@
 import logging
 import time
 import warnings
+from datetime import datetime
+from functools import cache
 from json import JSONDecodeError
 from typing import Any, Dict, Optional, Union
 
@@ -25,7 +27,7 @@ from requests.exceptions import RequestException
 from requests.structures import CaseInsensitiveDict
 from urllib3.exceptions import InsecureRequestWarning
 
-from geti_sdk.platform_versions import GETI_116_VERSION, GetiVersion
+from geti_sdk.platform_versions import GetiVersion
 
 from .exception import GetiRequestException
 from .server_config import ServerCredentialConfig, ServerTokenConfig
@@ -36,7 +38,7 @@ GETI_COOKIE_NAME = "geti-cookie"
 
 # INITIAL_HEADERS = {"Connection": "keep-alive", "Upgrade-Insecure-Requests": "1"}
 INITIAL_HEADERS = {"Upgrade-Insecure-Requests": "1"}
-SUCCESS_STATUS_CODES = [200, 201, 202]
+SUCCESS_STATUS_CODES = [200, 201, 202, 204]
 
 SAAS_MODE = "saas"
 ONPREM_MODE = "on-prem"
@@ -109,23 +111,22 @@ class GetiSession(requests.Session):
         # Get server version
         self._product_info = self._get_product_info_and_set_api_version()
         self._organization_id: Optional[str] = self._get_organization_id()
-        if self.version < GETI_116_VERSION:
-            raise ValueError(
-                "The Intel® Geti™ server version is not supported by this SDK. Please "
-                "update the Intel® Geti™ server to version 2.0 or later, or us the previous version of the SDK."
-            )
 
     @property
+    @cache
     def platform_serving_mode(self) -> str:
         """
         Return the type of the GETi platform service.
         """
-        deployment_config_response = self.request(
-            url=f"{self.config.host}/deployment-config.json",
-            method="GET",
-            proxies=self._proxies,
-        ).json()
-        serving_mode = deployment_config_response.get("servingMode").lower()
+        try:
+            deployment_config_response = self.request(
+                url=f"{self.config.host}/deployment-config.json",
+                method="GET",
+                proxies=self._proxies,
+            ).json()
+            serving_mode = deployment_config_response.get("servingMode").lower()
+        except requests.exceptions.JSONDecodeError:
+            return ONPREM_MODE
         if serving_mode == "on-prem":
             return ONPREM_MODE
         elif serving_mode == "saas":
@@ -233,10 +234,11 @@ class GetiSession(requests.Session):
         url: str,
         method: str,
         contenttype: str = "json",
-        data=None,
+        data: Optional[Any] = None,
         allow_reauthentication: bool = True,
         include_organization_id: bool = True,
         allow_text_response: bool = False,
+        request_headers: Dict[str, str] = {},
     ) -> Union[Response, dict, list]:
         """
         Return the REST response from a request to `url` with `method`.
@@ -257,9 +259,10 @@ class GetiSession(requests.Session):
             when authentication has expired. However, some endpoints are designed to
             return text responses, for those endpoints this parameter should be set to
             True
+        :param request_headers: Additional headers to include in the request
         """
-        if url.startswith(self.config.api_pattern):
-            url = url[len(self.config.api_pattern) :]
+        if self.config.api_pattern in url:
+            url = url.split(self.config.api_pattern)[-1]
 
         self._update_headers_for_content_type(content_type=contenttype)
 
@@ -280,8 +283,10 @@ class GetiSession(requests.Session):
             else:
                 raise ValueError(
                     f"Making a POST request with content of type {contenttype} is "
-                    f"currently not supported through the Geti SDK."
+                    f"currently not supported through the Intel Geti SDK."
                 )
+        elif method == "PATCH":
+            kw_data_arg = {"data": data}
         else:
             kw_data_arg = {}
 
@@ -301,38 +306,38 @@ class GetiSession(requests.Session):
         else:
             self.headers.pop("x-geti-csrf-protection", "")
 
-        try:
-            response = self.request(**request_params, proxies=self._proxies)
-        except requests.exceptions.SSLError as error:
-            raise requests.exceptions.SSLError(
-                f"Connection to Intel® Geti™ server at '{self.config.host}' failed, "
-                f"the server address can be resolved but the SSL certificate could not "
-                f"be verified. \n Full error description: {error.args[-1]}"
-            )
-        except ConnectionError as conn_error:
-            if conn_error.args[0] == "Connection aborted.":
-                # We fake a response and try to establish a
-                # new connection by re-authenticating
-                response = Response()
-                response.status_code = 401
-                response.raw = conn_error.args[-1]
-            else:
-                raise conn_error
-
-        response_content_type = response.headers.get("Content-Type", [])
-        if (
-            response.status_code not in SUCCESS_STATUS_CODES
-            or "text/html" in response_content_type
-        ):
-            if not ("text/html" in response_content_type and allow_text_response):
-                response = self._handle_error_response(
-                    response=response,
-                    request_params=request_params,
-                    request_data=kw_data_arg,
-                    allow_reauthentication=allow_reauthentication,
-                    content_type=contenttype,
+        # Make the request, retrying a maximum of 5 times in case of connection errors
+        retries = 5
+        last_conn_error: Optional[ConnectionError] = None
+        while retries:
+            try:
+                response = self.request(
+                    **request_params, proxies=self._proxies, headers=request_headers
                 )
+                break
+            except requests.exceptions.SSLError as error:
+                raise requests.exceptions.SSLError(
+                    f"Connection to Intel® Geti™ server at '{self.config.host}' failed, "
+                    f"the server address can be resolved but the SSL certificate could not "
+                    f"be verified. \n Full error description: {error.args[-1]}"
+                )
+            except ConnectionError as conn_error:
+                last_conn_error = conn_error
+                retries -= 1
 
+        if last_conn_error is not None:
+            raise last_conn_error
+        response_content_type = response.headers.get("Content-Type", [])
+        if response.status_code not in SUCCESS_STATUS_CODES or (
+            "text/html" in response_content_type and not allow_text_response
+        ):
+            response = self._handle_error_response(
+                response=response,
+                request_params=request_params,
+                request_data=kw_data_arg,
+                allow_reauthentication=allow_reauthentication,
+                content_type=contenttype,
+            )
         if response.headers.get("Content-Type", "").startswith("application/json"):
             result = response.json()
         else:
@@ -526,6 +531,10 @@ class GetiSession(requests.Session):
             self.headers.pop("Content-Type", None)
         elif content_type == "zip":
             self.headers.update({"Content-Type": "application/zip"})
+        elif content_type == "offset+octet-stream":
+            self.headers.update({"Content-Type": "application/offset+octet-stream"})
+        else:
+            self.headers.update({"Content-Type": content_type})
 
     @property
     def base_url(self) -> str:
@@ -538,7 +547,10 @@ class GetiSession(requests.Session):
     def _get_organization_id(self) -> str:
         """
         Return the organization ID associated with the user and host information configured
-        in this Session
+        in this Session.
+
+        NOTE: When authenticating with username and password, this method returns the
+        ID of the default organization for the user!
         """
         if not self.use_token:
             result = self.get_rest_response(
@@ -552,7 +564,26 @@ class GetiSession(requests.Session):
                 method="GET",
                 include_organization_id=False,
             )
-        org_id = result.get("organizationId", None)
+        if "organizationId" in result.keys():
+            # Geti < 2.5, return the id directly
+            org_id = result.get("organizationId", None)
+        elif "organizations" in result.keys():
+            # Geti 2.5 and up: list of organizations, return the default one (the one
+            # which was created at the earliest time)
+            org_list = result["organizations"]
+            creation_times = [
+                datetime.fromisoformat(
+                    x["organizationCreatedAt"].replace("Z", "+00:00")
+                )
+                for x in org_list
+            ]
+            ids = [x["organizationId"] for x in org_list]
+            earliest_creation_time = min(creation_times)
+            earliest_idx = creation_times.index(earliest_creation_time)
+            org_id = ids[earliest_idx]
+        else:
+            org_id = None
+
         if org_id is None:
             raise ValueError(
                 f"Unable to retrieve organization ID from the Intel Geti server. "
@@ -599,6 +630,15 @@ class GetiSession(requests.Session):
             raise ValueError(
                 "The cluster responded to the request, but authentication failed. "
                 "Please verify that you have provided correct credentials."
+            )
+        elif response.status_code == 404:
+            raise ValueError(
+                "Unable to authenticate with the Intel Geti server. The authentication "
+                "mechanism you are trying to use is no longer supported. This error "
+                "indicates that the Intel® Geti™ server version is not supported by "
+                "this version of the Intel Geti SDK package. Please update the "
+                "Intel® Geti™ server to version 2.0 or later, or use a previous "
+                "version of the SDK."
             )
         else:
             raise GetiRequestException(

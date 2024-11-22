@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import attr
 
+from geti_sdk.data_models.dataset import Dataset
 from geti_sdk.data_models.enums import JobState, JobType
-from geti_sdk.data_models.project import Dataset
 from geti_sdk.data_models.status import StatusSummary
 from geti_sdk.data_models.utils import (
     attr_value_serializer,
@@ -102,6 +102,31 @@ class ProjectMetadata:
 
     name: Optional[str] = None
     id: Optional[str] = None
+    type: Optional[str] = None
+
+
+@attr.define
+class DatasetMetadata:
+    """
+    Metadata related to a dataset on the GETi cluster.
+
+    :var name: Name of the dataset
+    :var id: ID of the dataset
+    """
+
+    name: Optional[str] = None
+    id: Optional[str] = None
+
+
+@attr.define
+class ParametersMetadata:
+    """
+    Metadata related to a project import to the GETi cluster.
+
+    :var file_id: ID of the uploaded file
+    """
+
+    file_id: Optional[str] = None
 
 
 @attr.define
@@ -153,11 +178,16 @@ class JobMetadata:
 
     task: Optional[TaskMetadata] = None
     project: Optional[ProjectMetadata] = None
+    dataset: Optional[DatasetMetadata] = None
+    parameters: Optional[ParametersMetadata] = None
     test: Optional[TestMetadata] = None
     base_model_id: Optional[str] = None
     model_storage_id: Optional[str] = None
     optimization_type: Optional[str] = None
     optimized_model_id: Optional[str] = None
+    download_url: Optional[str] = None
+    export_format: Optional[str] = None
+    file_id: Optional[str] = None
     scores: Optional[List[ScoreMetadata]] = None
     trained_model: Optional[ModelMetadata] = None  # Added in Geti v1.7
     warnings: Optional[List[dict]] = None  # Added in Geti v1.13 for dataset import jobs
@@ -177,9 +207,20 @@ class JobCancellationInfo:
     :var cancel_time: Time at which the Job was cancelled
     """
 
+    cancellable: bool = True
     is_cancelled: bool = False
     user_uid: Optional[str] = None
     cancel_time: Optional[str] = attr.field(converter=str_to_datetime, default=None)
+
+
+@attr.define
+class JobCost:
+    """
+    Information relating to the cost of a Job in Intel Geti.
+    """
+
+    requests: List
+    consumed: List
 
 
 @attr.define(slots=False)
@@ -191,6 +232,11 @@ class Job:
     :var id: Unique database ID of the job
     :var project_id: Unique database ID of the project from which the job originates
     :var type: Type of the job
+    :var creation_time: Time at which the job was created
+    :var start_time: Time at which the job started running
+    :var end_time: Time at which the job finished running
+    :var author: Author of the job
+    :var cancellation_info: Information relating to the cancellation of the jobW
     :var metadata: JobMetadata object holding metadata for the job
     """
 
@@ -198,7 +244,7 @@ class Job:
     id: str
     type: str = attr.field(converter=str_to_enum_converter(JobType))
     metadata: JobMetadata
-    project_id: Optional[str] = None
+    description: Optional[str] = None
     creation_time: Optional[str] = attr.field(converter=str_to_datetime, default=None)
     start_time: Optional[str] = attr.field(
         converter=str_to_datetime, default=None
@@ -212,6 +258,7 @@ class Job:
         converter=str_to_optional_enum_converter(JobState), default=None
     )  # Added in Geti v1.7
     steps: Optional[List[dict]] = None  # Added in Geti v1.7
+    cost: Optional[JobCost] = None  # Added in Geti v2.2
 
     def __attrs_post_init__(self):
         """
@@ -282,6 +329,12 @@ class Job:
 
         self.steps = response.get("steps", None)
         self.state = JobState(response["state"])
+        self.metadata.project_id = response["metadata"].get("project_id", None)
+        self.metadata.download_url = response["metadata"].get("download_url", None)
+        self.metadata.warnings = response["metadata"].get("warnings", None)
+        self.metadata.supported_project_types = response["metadata"].get(
+            "supported_project_types", None
+        )
 
         if self._geti_version is None:
             self.geti_version = session.version

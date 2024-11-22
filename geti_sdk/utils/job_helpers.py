@@ -122,8 +122,6 @@ def get_job_with_timeout(
                 f"Unable to find the resulting {job_type} job on the Intel® Geti™ "
                 f"server."
             )
-    job.workspace_id = workspace_id
-    job.geti_version = session.version
     return job
 
 
@@ -274,7 +272,7 @@ def monitor_jobs(
 
 def monitor_job(
     session: GetiSession, job: Job, timeout: int = 10000, interval: int = 15
-) -> List[Job]:
+) -> Job:
     """
     Monitor and print the progress of a single `job`. Execution is
     halted until the job has either finished, failed or was cancelled.
@@ -326,7 +324,11 @@ def monitor_job(
             previous_progress = 0
             previous_message = job.current_step_message
             current_step = job.current_step
-            outer_description = f"Project `{job.metadata.project.name}` - {job.name}"
+            outer_description = (
+                f"Project `{job.metadata.project.name}` - "
+                if job.metadata.project
+                else ""
+            ) + f"{job.name}"
             total_steps = job.total_steps
             outer_bar = tqdm(
                 total=total_steps,
@@ -354,6 +356,11 @@ def monitor_job(
             inner_bar.set_description(previous_message)
             while monitoring and t_elapsed < timeout:
                 job.update(session)
+                if job.total_steps > total_steps:
+                    total_steps = job.total_steps
+                    outer_bar.reset(total=job.total_steps)
+                    outer_bar.update(job.current_step)
+                    current_step = job.current_step
                 if job.state in completed_states:
                     outer_bar.update(total_steps - current_step)
                     inner_bar.update(100 - previous_progress)

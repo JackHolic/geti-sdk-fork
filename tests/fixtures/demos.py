@@ -50,10 +50,10 @@ def fxt_anomaly_classification_demo_project(
     fxt_demo_images_and_annotations: Tuple[int, int],
 ) -> Project:
     """
-    Create an annotated anomaly classification project on the Geti instance, and
+    Create an annotated anomaly detection project on the Geti instance, and
     return the Project object representing it.
     """
-    project_name = f"{PROJECT_PREFIX}_anomaly_classification_demo"
+    project_name = f"{PROJECT_PREFIX}_anomaly_demo"
     project = create_anomaly_classification_demo_project(
         geti=fxt_geti_no_vcr,
         n_images=fxt_demo_images_and_annotations[0],
@@ -62,7 +62,8 @@ def fxt_anomaly_classification_demo_project(
     )
     yield project
     force_delete_project(
-        project_name=project_name, project_client=fxt_project_client_no_vcr
+        project,
+        project_client=fxt_project_client_no_vcr,
     )
 
 
@@ -85,7 +86,8 @@ def fxt_segmentation_demo_project(
     )
     yield project
     force_delete_project(
-        project_name=project.name, project_client=fxt_project_client_no_vcr
+        project,
+        project_client=fxt_project_client_no_vcr,
     )
 
 
@@ -108,7 +110,8 @@ def fxt_detection_to_classification_demo_project(
     )
     yield project
     force_delete_project(
-        project_name=project.name, project_client=fxt_project_client_no_vcr
+        project,
+        project_client=fxt_project_client_no_vcr,
     )
 
 
@@ -131,7 +134,8 @@ def fxt_detection_to_segmentation_demo_project(
     )
     yield project
     force_delete_project(
-        project_name=project_name, project_client=fxt_project_client_no_vcr
+        project,
+        project_client=fxt_project_client_no_vcr,
     )
 
 
@@ -154,7 +158,8 @@ def fxt_classification_demo_project(
     )
     yield project
     force_delete_project(
-        project_name=project_name, project_client=fxt_project_client_no_vcr
+        project,
+        project_client=fxt_project_client_no_vcr,
     )
 
 
@@ -177,7 +182,8 @@ def fxt_detection_demo_project(
     )
     yield project
     force_delete_project(
-        project_name=project_name, project_client=fxt_project_client_no_vcr
+        project,
+        project_client=fxt_project_client_no_vcr,
     )
 
 

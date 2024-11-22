@@ -26,6 +26,13 @@ from geti_sdk.annotation_readers import AnnotationReader, DatumAnnotationReader
 from geti_sdk.data_models import Job, Prediction, Project
 from geti_sdk.deployment import Deployment
 from geti_sdk.http_session import GetiRequestException
+from geti_sdk.post_inference_hooks import (
+    AlwaysTrigger,
+    ConfidenceTrigger,
+    FileSystemDataCollection,
+    GetiDataCollection,
+    PostInferenceHook,
+)
 from geti_sdk.rest_clients import (
     AnnotationClient,
     DatasetClient,
@@ -193,7 +200,7 @@ class TestGeti:
         fxt_annotation_reader.filter_dataset(
             labels=fxt_default_labels, criterion=dataset_filter_criterion
         )
-        fxt_geti.create_single_task_project_from_dataset(
+        project = fxt_geti.create_single_task_project_from_dataset(
             project_name=project_name,
             project_type=project_type,
             path_to_images=fxt_image_folder,
@@ -202,7 +209,7 @@ class TestGeti:
             max_threads=1,
         )
 
-        request.addfinalizer(lambda: fxt_project_finalizer(project_name))
+        request.addfinalizer(lambda: fxt_project_finalizer(project))
 
     @pytest.mark.vcr()
     @pytest.mark.parametrize(
@@ -250,7 +257,7 @@ class TestGeti:
             enable_auto_train=False,
             max_threads=1,
         )
-        request.addfinalizer(lambda: fxt_project_finalizer(project_name))
+        request.addfinalizer(lambda: fxt_project_finalizer(project))
 
         all_labels = fxt_default_labels + ["block"]
         for label_name in all_labels:
@@ -279,8 +286,8 @@ class TestGeti:
         project = lazy_fxt_project_service.project
         target_folder = os.path.join(fxt_temp_directory, project.name)
 
-        fxt_geti.download_project(
-            project.name,
+        fxt_geti.download_project_data(
+            project,
             target_folder=target_folder,
             max_threads=1,
         )
@@ -288,16 +295,16 @@ class TestGeti:
         assert os.path.isdir(target_folder)
         assert "project.json" in os.listdir(target_folder)
 
-        n_images = len(os.listdir(os.path.join(target_folder, "images")))
+        n_images = len(os.listdir(os.path.join(target_folder, "images", "Dataset")))
         n_annotations = len(os.listdir(os.path.join(target_folder, "annotations")))
 
-        uploaded_project = fxt_geti.upload_project(
+        uploaded_project = fxt_geti.upload_project_data(
             target_folder=target_folder,
             project_name=f"{project.name}_upload",
             enable_auto_train=False,
             max_threads=1,
         )
-        request.addfinalizer(lambda: fxt_project_finalizer(uploaded_project.name))
+        request.addfinalizer(lambda: fxt_project_finalizer(uploaded_project))
         image_client = ImageClient(
             session=fxt_geti.session,
             workspace_id=fxt_geti.workspace_id,
@@ -321,7 +328,7 @@ class TestGeti:
                 workspace_id=fxt_geti.workspace_id,
                 project=uploaded_project,
             )
-            n_videos = len(os.listdir(os.path.join(target_folder, "videos")))
+            n_videos = len(os.listdir(os.path.join(target_folder, "videos", "Dataset")))
             videos = video_client.get_all_videos()
 
             assert len(videos) == n_videos
@@ -384,7 +391,7 @@ class TestGeti:
         for j in range(n_attempts):
             try:
                 image, prediction = fxt_geti.upload_and_predict_image(
-                    project_name=project.name,
+                    project=project,
                     image=fxt_image_path,
                     visualise_output=False,
                     delete_after_prediction=False,
@@ -410,7 +417,7 @@ class TestGeti:
         Verify that the `Geti.upload_and_predict_video` method works as expected
         """
         video, frames, predictions = fxt_geti.upload_and_predict_video(
-            project_name=fxt_project_service.project.name,
+            project=fxt_project_service.project,
             video=fxt_video_path_1_light_bulbs,
             visualise_output=False,
         )
@@ -423,15 +430,16 @@ class TestGeti:
 
         # Check that invalid project raises a KeyError
         with pytest.raises(KeyError):
+            project = fxt_geti.get_project(project_name="invalid_project_name")
             fxt_geti.upload_and_predict_video(
-                project_name="invalid_project_name",
+                project=project,
                 video=fxt_video_path_1_light_bulbs,
                 visualise_output=False,
             )
 
         # Check that video is not uploaded if it's already in the project
         video, frames, predictions = fxt_geti.upload_and_predict_video(
-            project_name=fxt_project_service.project.name,
+            project=fxt_project_service.project,
             video=video,
             visualise_output=False,
         )
@@ -441,7 +449,7 @@ class TestGeti:
         new_frames = video.to_frames(frame_stride=50, include_data=True)
         np_frames = [frame.numpy for frame in new_frames]
         np_video, frames, predictions = fxt_geti.upload_and_predict_video(
-            project_name=fxt_project_service.project.name,
+            project=fxt_project_service.project,
             video=np_frames,
             visualise_output=False,
             delete_after_prediction=True,
@@ -466,14 +474,14 @@ class TestGeti:
         image_output_folder = os.path.join(fxt_temp_directory, "inferred_images")
 
         video_success = fxt_geti.upload_and_predict_media_folder(
-            project_name=fxt_project_service.project.name,
+            project=fxt_project_service.project,
             media_folder=fxt_video_folder_light_bulbs,
             output_folder=video_output_folder,
             delete_after_prediction=True,
             max_threads=1,
         )
         image_success = fxt_geti.upload_and_predict_media_folder(
-            project_name=fxt_project_service.project.name,
+            project=fxt_project_service.project,
             media_folder=fxt_image_folder_light_bulbs,
             output_folder=image_output_folder,
             delete_after_prediction=True,
@@ -505,9 +513,20 @@ class TestGeti:
         project = lazy_fxt_project_service.project
         deployment_folder = os.path.join(fxt_temp_directory, project.name)
 
-        deployment = fxt_geti.deploy_project(
-            project.name, output_folder=deployment_folder
-        )
+        n_attempts = 2 if fxt_test_mode != SdkTestMode.OFFLINE else 1
+        sleep_time = 20 if fxt_test_mode != SdkTestMode.OFFLINE else 1
+        for _ in range(n_attempts):
+            try:
+                deployment = fxt_geti.deploy_project(
+                    project=project,
+                    output_folder=deployment_folder,
+                    enable_explainable_ai=True,
+                )
+            except (ValueError, FileNotFoundError) as error:
+                deployment = None
+                time.sleep(sleep_time)
+                logging.info(error)
+        assert deployment is not None
 
         assert os.path.isdir(os.path.join(deployment_folder, "deployment"))
         deployment.load_inference_models(device="CPU")
@@ -518,7 +537,7 @@ class TestGeti:
         local_prediction = deployment.infer(image_np)
         assert isinstance(local_prediction, Prediction)
         image, online_prediction = fxt_geti.upload_and_predict_image(
-            project.name,
+            project,
             image=image_np,
             delete_after_prediction=True,
             visualise_output=False,
@@ -543,6 +562,98 @@ class TestGeti:
         assert deployment_from_folder.models[0].name == deployment.models[0].name
 
     @pytest.mark.vcr()
+    def test_post_inference_hooks(
+        self,
+        fxt_project_service: ProjectService,
+        fxt_geti: Geti,
+        fxt_image_path: str,
+        fxt_temp_directory: str,
+    ):
+        """
+        Test that adding post inference hooks to a deployment works, and that the
+        hooks function as expected
+        """
+        project = fxt_project_service.project
+        deployment_folder = os.path.join(fxt_temp_directory, project.name)
+
+        deployment = fxt_geti.deploy_project(project=project)
+        dataset_name = "Test hooks"
+
+        # Add a GetiDataCollectionHook
+        trigger = AlwaysTrigger()
+        action = GetiDataCollection(
+            session=fxt_geti.session,
+            workspace_id=fxt_geti.workspace_id,
+            project=project,
+            dataset=dataset_name,
+        )
+        hook = PostInferenceHook(trigger=trigger, action=action)
+        deployment.add_post_inference_hook(hook)
+
+        # Add a FileSystemDataCollection hook
+        hook_data = os.path.join(deployment_folder, "hook_data")
+        trigger_2 = ConfidenceTrigger(threshold=1.1)
+        action_2 = FileSystemDataCollection(target_folder=hook_data)
+        hook_2 = PostInferenceHook(trigger=trigger_2, action=action_2, max_threads=0)
+        deployment.add_post_inference_hook(hook_2)
+
+        deployment.load_inference_models(device="CPU")
+        image_bgr = cv2.imread(fxt_image_path)
+        image_np = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        _ = deployment.infer(image_np)
+
+        # Small delay to ensure that the hooks have time to run
+        time.sleep(1)
+
+        dataset_client = DatasetClient(
+            session=fxt_geti.session,
+            workspace_id=fxt_geti.workspace_id,
+            project=project,
+        )
+
+        assert len(deployment.post_inference_hooks) == 2
+
+        # Assert that the hooks have fired
+        dataset = dataset_client.get_dataset_by_name(dataset_name)
+        hook_images = fxt_project_service.image_client.get_all_images(dataset=dataset)
+        assert len(hook_images) == 1
+        expected_folders = ["images", "overlays", "predictions", "scores"]
+        for folder_name in expected_folders:
+            assert folder_name in os.listdir(hook_data)
+            assert len(os.listdir(os.path.join(hook_data, folder_name))) == 1
+
+        # Set deployment to async mode
+        results: List[Prediction] = []
+
+        def process_results(image, prediction, data):
+            results.append(prediction)
+
+        deployment.set_asynchronous_callback(process_results)
+        assert deployment.asynchronous_mode
+
+        deployment.infer_async(image_np)
+        deployment.await_all()
+
+        # Assert that the process_results callback has run
+        assert len(results) == 1
+
+        # Small delay to ensure that the hooks have time to run
+        time.sleep(1)
+
+        # Assert that the hooks have fired in the async case: 1 image should have
+        # been added to both Geti dataset and results folders
+        hook_images = fxt_project_service.image_client.get_all_images(dataset=dataset)
+        assert len(hook_images) == 2
+        for folder_name in expected_folders:
+            assert len(os.listdir(os.path.join(hook_data, folder_name))) == 2
+
+        deployment.clear_inference_hooks()
+        assert len(deployment.post_inference_hooks) == 0
+
+        deployment.asynchronous_mode = False
+        assert not deployment._async_callback_defined
+
+    @pytest.mark.vcr()
     def test_download_project_including_models_and_predictions(
         self,
         fxt_project_service: ProjectService,
@@ -557,8 +668,8 @@ class TestGeti:
         target_folder = os.path.join(
             fxt_temp_directory, project.name + "_all_inclusive"
         )
-        fxt_geti.download_project(
-            project_name=project.name,
+        fxt_geti.download_project_data(
+            project=project,
             target_folder=target_folder,
             include_predictions=True,
             include_active_models=True,

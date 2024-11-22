@@ -36,7 +36,7 @@ def get_requirements(filename: str) -> List[str]:
     return required_packages
 
 
-with open("geti_sdk/__init__.py", "r", encoding="utf-8") as init_file:
+with open("geti_sdk/_version.py", "r", encoding="utf-8") as init_file:
     for line in init_file:
         line = line.strip()
         if line.startswith("__version__"):
@@ -64,7 +64,7 @@ setuptools.setup(
         "License :: OSI Approved :: Apache Software License",
     ],
     packages=setuptools.find_packages(),
-    python_requires=">=3.9",
+    python_requires=">=3.9,<3.12",
     install_requires=get_requirements("requirements.txt"),
     extras_require={
         "dev": get_requirements("requirements-dev.txt"),

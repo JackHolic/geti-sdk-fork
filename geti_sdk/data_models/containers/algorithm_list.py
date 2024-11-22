@@ -26,6 +26,7 @@ DEFAULT_ALGORITHMS = {
     "anomaly_classification": "ote_anomaly_classification_padim",
     "anomaly_detection": "ote_anomaly_classification_padim",
     "anomaly_segmentation": "ote_anomaly_segmentation_padim",
+    "anomaly": "ote_anomaly_classification_padim",
     "rotated_detection": "Custom_Rotated_Detection_via_Instance_Segmentation_MaskRCNN_ResNet50",
     "instance_segmentation": "Custom_Counting_Instance_Segmentation_MaskRCNN_ResNet50",
 }
@@ -53,13 +54,18 @@ class AlgorithmList(UserList):
             algorithms in Intel® Geti™
         """
         algorithm_list = AlgorithmList([])
-        try:
+        if "items" in rest_input:
             algo_rest = rest_input["items"]
-        except KeyError:
+        elif "supported_algorithms" in rest_input:
             algo_rest = rest_input["supported_algorithms"]
+        else:
+            raise KeyError(
+                "The input dictionary does not contain the supported algorithms."
+            )
         algo_rest_list = copy.deepcopy(algo_rest)
         for algorithm_dict in algo_rest_list:
             algorithm_list.append(Algorithm(**algorithm_dict))
+        algorithm_list.sort(key=lambda x: x.gigaflops)
         return algorithm_list
 
     def get_by_model_template(self, model_template_id: str) -> Algorithm:
@@ -102,7 +108,8 @@ class AlgorithmList(UserList):
                 f"  Name: {algorithm.name}\n"
                 f"    Task type: {algorithm.task_type}\n"
                 f"    Model size: {algorithm.model_size}\n"
-                f"    Gigaflops: {algorithm.gigaflops}\n\n"
+                f"    Gigaflops: {algorithm.gigaflops}\n"
+                f"    Recommended for: {algorithm.performance_category}\n\n"
             )
         return summary_str
 

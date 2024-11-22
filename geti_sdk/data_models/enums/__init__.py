@@ -26,12 +26,15 @@ from .model_status import ModelStatus
 from .optimization_type import OptimizationType
 from .prediction_mode import PredictionMode
 from .shape_type import ShapeType
+from .subscription_status import SubscriptionStatus
+from .subset_purpose import SubsetPurpose
 from .task_type import TaskType
 
 __all__ = [
     "TaskType",
     "MediaType",
     "ShapeType",
+    "SubscriptionStatus",
     "AnnotationKind",
     "AnnotationState",
     "PredictionMode",
@@ -42,4 +45,5 @@ __all__ = [
     "JobType",
     "JobState",
     "DeploymentState",
+    "SubsetPurpose",
 ]

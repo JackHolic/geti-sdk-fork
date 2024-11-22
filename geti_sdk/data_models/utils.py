@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions
 # and limitations under the License.
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union
@@ -206,7 +207,12 @@ def str_to_datetime(datetime_str: Optional[Union[str, datetime]]) -> Optional[da
     """
     if isinstance(datetime_str, str):
         try:
-            return datetime.fromisoformat(datetime_str)
+            if datetime_str.isdigit():
+                # POSIX timestamp
+                return datetime.fromtimestamp(int(datetime_str) / 1000)
+            else:
+                # ISO format
+                return datetime.fromisoformat(datetime_str)
         except ValueError:
             logging.debug(
                 f"Unable to convert str '{datetime_str}' to datetime, converter "
@@ -306,11 +312,11 @@ def remove_null_fields(input: Any):
         for key, value in list(input.items()):
             if isinstance(value, dict):
                 remove_null_fields(value)
-            elif value is None or value == "":
-                input.pop(key)
-            elif isinstance(value, list):
+            elif isinstance(value, Sequence) and not isinstance(value, str):
                 for item in value:
                     remove_null_fields(item)
+            elif value is None or (isinstance(value, str) and value == ""):
+                input.pop(key)
     elif isinstance(input, list):
         for item in input:
             remove_null_fields(item)

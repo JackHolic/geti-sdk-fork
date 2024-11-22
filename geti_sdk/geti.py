@@ -14,20 +14,19 @@
 import logging
 import os
 import sys
-import time
 import warnings
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
-from pathvalidate import sanitize_filepath
-from tqdm.auto import tqdm
-from tqdm.contrib.logging import logging_redirect_tqdm
+from packaging.version import Version
 
-from .annotation_readers import (
-    AnnotationReader,
-    DatumAnnotationReader,
-    GetiAnnotationReader,
-)
+from geti_sdk.data_models.enums.dataset_format import DatasetFormat
+from geti_sdk.import_export.import_export_module import GetiIE
+from geti_sdk.platform_versions import GETI_116_VERSION
+from geti_sdk.rest_clients.credit_system_client import CreditSystemClient
+
+from ._version import __version__ as sdk_version_string
+from .annotation_readers import AnnotationReader, DatumAnnotationReader
 from .data_models import (
     Dataset,
     Image,
@@ -40,19 +39,13 @@ from .data_models import (
 from .data_models.containers import MediaList
 from .data_models.model import BaseModel
 from .deployment import Deployment
-from .http_session import (
-    GetiRequestException,
-    GetiSession,
-    ServerCredentialConfig,
-    ServerTokenConfig,
-)
+from .http_session import GetiSession, ServerCredentialConfig, ServerTokenConfig
 from .rest_clients import (
     AnnotationClient,
     ConfigurationClient,
     DatasetClient,
     DeploymentClient,
     ImageClient,
-    ModelClient,
     PredictionClient,
     ProjectClient,
     VideoClient,
@@ -60,7 +53,6 @@ from .rest_clients import (
 from .utils import (
     generate_classification_labels,
     get_default_workspace_id,
-    get_project_folder_name,
     get_task_types_by_project_type,
     show_image_with_annotation_scene,
     show_video_frames_with_annotation_scenes,
@@ -68,6 +60,8 @@ from .utils import (
 
 DEFAULT_LOG_LEVEL = logging.INFO
 DEFAULT_LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+
+logging.captureWarnings(True)
 
 
 class Geti:
@@ -182,19 +176,59 @@ class Geti:
                     "please update the `server_config` accordingly."
                 )
 
+        # Set the Intel Geti SDK version
+        self.sdk_version = Version(sdk_version_string)
         # Initialize session and get workspace id
         self.session = GetiSession(
             server_config=server_config,
         )
+        # Now that the connection to the server is established, check the platform version
+        self._check_platform_version()
+        # Get workspace ID
         if workspace_id is None:
             workspace_id = get_default_workspace_id(self.session)
         self.workspace_id = workspace_id
         self.project_client = ProjectClient(
             workspace_id=workspace_id, session=self.session
         )
+        self.import_export_module = GetiIE(
+            session=self.session,
+            workspace_id=self.workspace_id,
+            project_client=self.project_client,
+        )
+        self.credit_system_client = CreditSystemClient(
+            session=self.session, workspace_id=self.workspace_id
+        )
 
         # Cache of deployment clients for projects in the workspace
         self._deployment_clients: Dict[str, DeploymentClient] = {}
+
+    def _check_platform_version(self) -> None:
+        """
+        Check the version of the Intel® Geti™ server that this `Geti` instance is
+        connected to. If the version is not supported by the SDK, a warning will be
+        issued.
+
+        :raises: ValueError if the Intel® Geti™ server version is not supported by the
+            Intel® Geti™ SDK.
+        """
+        # Get the build version without a timestamp
+        platform_version = self.session.version.version
+        # Check if the platform version is newer than the SDK version
+        if platform_version > self.sdk_version:
+            warnings.warn(
+                f"The Intel® Geti™ server version {platform_version} is newer than "
+                f"the Geti SDK version {self.sdk_version}. Some features may not be "
+                "supported and you may encounter errors.\n"
+                "Please update the Intel Geti SDK to the latest version "
+                "with `pip install --upgrade geti-sdk`."
+            )
+        # Check if the platform version is older than the last supported version
+        if self.session.version < GETI_116_VERSION:
+            raise ValueError(
+                "The Intel® Geti™ server version is not supported by this Intel Geti SDK package. Please "
+                "update the Intel® Geti™ server to version 2.0 or later, or use a previous version of the SDK."
+            )
 
     @property
     def projects(self) -> List[Project]:
@@ -207,17 +241,40 @@ class Geti:
         """
         return self.project_client.get_all_projects()
 
-    def get_project(self, project_name: str) -> Project:
+    @property
+    def credit_balance(self) -> Optional[int]:
         """
-        Return the Intel® Geti™ project named `project_name`, if any. If no project by
-        that name is found on the Intel® Geti™ server, this method will raise a
-        KeyError.
+        Get the current available credit balance in the workspace.
 
-        :param project_name: Name of the project to retrieve
-        :raises: KeyError if project named `project_name` is not found on the server
-        :return: Project identified by `project_name`
+        :return: The available credit balance in the workspace.
         """
-        project = self.project_client.get_project_by_name(project_name=project_name)
+        balance = self.credit_system_client.get_balance()
+        return balance.available if balance is not None else None
+
+    def get_project(
+        self,
+        project_name: Optional[str] = None,
+        project_id: Optional[str] = None,
+        project: Optional[Project] = None,
+    ) -> Project:
+        """
+        Return the Intel® Geti™ project by name or ID, if any.
+        If a project object is passed, the method will return the updated object.
+        If no project by that name is found on the Intel® Geti™ server,
+        this method will raise a KeyError.
+
+        :param project_name: Name of the project to retrieve.
+        :param project_id: ID of the project to retrieve. If not specified, the
+            project with name `project_name` will be retrieved.
+        :param project: Project object to update. If provided, the associated `project_id`
+            will be used to update the project object.
+        :raises: KeyError if the project identified by one of the arguments is not found on the server
+        :raises: ValueError if there are several projects on the server named `project_name`
+        :return: Project identified by one of the arguments.
+        """
+        project = self.project_client.get_project(
+            project_name=project_name, project_id=project_id, project=project
+        )
         if project is None:
             raise KeyError(
                 f"Project '{project_name}' was not found in the current workspace on "
@@ -225,9 +282,9 @@ class Geti:
             )
         return project
 
-    def download_project(
+    def download_project_data(
         self,
-        project_name: str,
+        project: Project,
         target_folder: Optional[str] = None,
         include_predictions: bool = False,
         include_active_models: bool = False,
@@ -283,7 +340,7 @@ class Geti:
         Downloading a project may take a substantial amount of time if the project
         dataset is large.
 
-        :param project_name: Name of the project to download
+        :param project: Project object to download
         :param target_folder: Path to the local folder in which the project data
             should be saved. If not specified, a new directory will be created inside
             the current working directory. The name of the resulting directory will be
@@ -304,94 +361,22 @@ class Geti:
         :return: Project object, holding information obtained from the cluster
             regarding the downloaded project
         """
-        # Obtain project details from cluster
-        project = self.get_project(project_name)
-
-        # Validate or create target_folder
-        if target_folder is None:
-            target_folder = os.path.join(".", get_project_folder_name(project))
-        else:
-            sanitize_filepath(target_folder, platform="auto")
-        os.makedirs(target_folder, exist_ok=True, mode=0o770)
-
-        # Download project creation parameters:
-        self.project_client.download_project_info(
-            project_name=project_name, path_to_folder=target_folder
+        project = self.import_export_module.download_project_data(
+            project=project,
+            target_folder=target_folder,
+            include_predictions=include_predictions,
+            include_active_models=include_active_models,
+            max_threads=max_threads,
         )
-
-        # Download images
-        image_client = ImageClient(
-            workspace_id=self.workspace_id, session=self.session, project=project
-        )
-        images = image_client.get_all_images()
-        if len(images) > 0:
-            image_client.download_all(
-                path_to_folder=target_folder,
-                append_image_uid=images.has_duplicate_filenames,
-                max_threads=max_threads,
-            )
-
-        # Download videos
-        video_client = VideoClient(
-            workspace_id=self.workspace_id, session=self.session, project=project
-        )
-        videos = video_client.get_all_videos()
-        if len(videos) > 0:
-            video_client.download_all(
-                path_to_folder=target_folder,
-                append_video_uid=videos.has_duplicate_filenames,
-                max_threads=max_threads,
-            )
-
-        # Download annotations
-        annotation_client = AnnotationClient(
-            session=self.session, project=project, workspace_id=self.workspace_id
-        )
-        annotation_client.download_all_annotations(
-            path_to_folder=target_folder, max_threads=max_threads
-        )
-
-        # Download predictions
-        prediction_client = PredictionClient(
-            workspace_id=self.workspace_id, session=self.session, project=project
-        )
-        if prediction_client.ready_to_predict and include_predictions:
-            if len(images) > 0:
-                prediction_client.download_predictions_for_images(
-                    images=images,
-                    path_to_folder=target_folder,
-                    include_result_media=True,
-                )
-            if len(videos) > 0:
-                prediction_client.download_predictions_for_videos(
-                    videos=videos,
-                    path_to_folder=target_folder,
-                    include_result_media=True,
-                    inferred_frames_only=False,
-                )
-
-        # Download configuration
-        configuration_client = ConfigurationClient(
-            workspace_id=self.workspace_id, session=self.session, project=project
-        )
-        configuration_client.download_configuration(path_to_folder=target_folder)
-
-        # Download active models
-        if include_active_models:
-            model_client = ModelClient(
-                workspace_id=self.workspace_id, session=self.session, project=project
-            )
-            model_client.download_all_active_models(path_to_folder=target_folder)
-
         # Download deployment
         if include_deployment:
             logging.info("Creating deployment for project...")
-            self.deploy_project(project.name, output_folder=target_folder)
+            self.deploy_project(project=project, output_folder=target_folder)
 
         logging.info(f"Project '{project.name}' was downloaded successfully.")
         return project
 
-    def upload_project(
+    def upload_project_data(
         self,
         target_folder: str,
         project_name: Optional[str] = None,
@@ -433,126 +418,157 @@ class Geti:
         :return: Project object, holding information obtained from the cluster
             regarding the uploaded project
         """
-        project = self.project_client.create_project_from_folder(
-            path_to_folder=target_folder, project_name=project_name
+        return self.import_export_module.upload_project_data(
+            target_folder=target_folder,
+            project_name=project_name,
+            enable_auto_train=enable_auto_train,
+            max_threads=max_threads,
         )
 
-        # Disable auto-train to prevent the project from training right away
-        configuration_client = ConfigurationClient(
-            workspace_id=self.workspace_id, session=self.session, project=project
-        )
-        configuration_client.set_project_auto_train(auto_train=False)
+    def download_all_projects(
+        self, target_folder: str, include_predictions: bool = True
+    ) -> List[Project]:
+        """
+        Download all projects in the workspace from the Intel® Geti™ server.
 
-        # Upload media
-        image_client = ImageClient(
-            workspace_id=self.workspace_id, session=self.session, project=project
-        )
-        video_client = VideoClient(
-            workspace_id=self.workspace_id, session=self.session, project=project
+        :param target_folder: Directory on local disk to download the project data to.
+            If not specified, this method will create a directory named 'projects' in
+            the current working directory.
+        :param include_predictions: True to also download the predictions for all
+            images and videos in the project, False to not download any predictions.
+            If this is set to True but the project has no trained models, downloading
+            predictions will be skipped.
+        :return: List of Project objects, each entry corresponding to one of the
+            projects found on the Intel® Geti™ server
+        """
+        return self.import_export_module.download_all_projects(
+            target_folder=target_folder, include_predictions=include_predictions
         )
 
-        # Check the media folders inside the project folder. If they are organized
-        # according to the projects datasets, upload the media into their corresponding
-        # dataset. Otherwise, upload all media into training dataset.
-        dataset_client = DatasetClient(
-            workspace_id=self.workspace_id, session=self.session, project=project
+    def upload_all_projects(self, target_folder: str) -> List[Project]:
+        """
+        Upload all projects found in the directory `target_folder` on local disk to
+        the Intel® Geti™ server.
+
+        This method expects the directory `target_folder` to contain subfolders. Each
+        subfolder should correspond to the (previously downloaded) data for one
+        project. The method looks for project folders non-recursively, meaning that
+        only folders directly below the `target_folder` in the hierarchy are
+        considered to be uploaded as project.
+
+        :param target_folder: Directory on local disk to retrieve the project data from
+        :return: List of Project objects, each entry corresponding to one of the
+            projects uploaded to the Intel® Geti™ server.
+        """
+        return self.import_export_module.upload_all_projects(
+            target_folder=target_folder
         )
-        if len(project.datasets) == 1 or not dataset_client.has_dataset_subfolders(
-            target_folder
-        ):
-            # Upload all media directly to the training dataset
-            images = image_client.upload_folder(
-                path_to_folder=os.path.join(target_folder, "images"),
-                max_threads=max_threads,
+
+    def export_project(
+        self,
+        filepath: os.PathLike,
+        project: Project,
+    ) -> None:
+        """
+        Export a project with name `project_name` to the file specified by `filepath`.
+        The project will be saved in a .zip file format, containing all project data
+        and metadata required for project import to another instance of the Intel® Geti™ platform.
+
+        :param filepath: Path to the file to save the project to
+        :param project: Project object to export
+        """
+        if project.id is None:
+            raise ValueError(
+                f"Could not retrieve project ID for project '{project.name}'."
+                "Please reinitialize the project object."
             )
-            videos = video_client.upload_folder(
-                path_to_folder=os.path.join(target_folder, "videos"),
-                max_threads=max_threads,
-            )
-        else:
-            # Make sure that media is uploaded to the correct dataset
-            images: MediaList[Image] = MediaList([])
-            videos: MediaList[Video] = MediaList([])
-            for dataset in project.datasets:
-                images.extend(
-                    image_client.upload_folder(
-                        path_to_folder=os.path.join(
-                            target_folder, "images", dataset.name
-                        ),
-                        dataset=dataset,
-                        max_threads=max_threads,
-                    )
-                )
-                videos.extend(
-                    video_client.upload_folder(
-                        path_to_folder=os.path.join(
-                            target_folder, "videos", dataset.name
-                        ),
-                        dataset=dataset,
-                        max_threads=max_threads,
-                    )
-                )
-
-        # Short sleep to make sure all uploaded media is processed server side
-        time.sleep(5)
-
-        # Upload annotations
-        annotation_reader = GetiAnnotationReader(
-            base_data_folder=os.path.join(target_folder, "annotations"),
-            task_type=None,
+        self.import_export_module.export_project(
+            project_id=project.id, filepath=filepath
         )
-        annotation_client = AnnotationClient[GetiAnnotationReader](
-            session=self.session,
+
+    def import_project(
+        self, filepath: os.PathLike, project_name: Optional[str] = None
+    ) -> Project:
+        """
+        Import a project from the zip file specified by `filepath` to the Intel® Geti™ server.
+        The project will be created on the server with the name `project_name`, if
+        specified, esle with the archive base name.
+        > Note: The project zip archive should be exported from the Geti™ server of the same version.
+
+        :param filepath: Path to the file to import the project from
+        :param project_name: Optional name of the project to create on the cluster. If
+            left unspecified, the name of the archive file will be used.
+        :return: Project object, holding information obtained from the cluster
+            regarding the uploaded project.
+        """
+        return self.import_export_module.import_project(
+            filepath=filepath, project_name=project_name
+        )
+
+    def export_dataset(
+        self,
+        project: Project,
+        dataset: Dataset,
+        filepath: os.PathLike,
+        export_format: Union[str, DatasetFormat] = "DATUMARO",
+        include_unannotated_media: bool = False,
+    ):
+        """
+        Export a dataset from a project to a file specified by `filepath`. The dataset
+        will be saved in the format specified by `export_format`.
+
+        :param project: Project object to export the dataset from
+        :param dataset: Dataset object to export
+        :param filepath: Path to the file to save the dataset to
+        :param export_format: Format to save the dataset in. Provide on of the following
+            strings: 'COCO', 'YOLO', 'VOC', 'DATUMARO' or a corresponding DatasetFormat object.
+        :param include_unannotated_media: True to include media that have no annotations
+            in the dataset, False to only include media with annotations. Defaults to
+            False.
+        """
+        if isinstance(export_format, str):
+            export_format = DatasetFormat[export_format]
+        self.import_export_module.export_dataset(
             project=project,
-            workspace_id=self.workspace_id,
-            annotation_reader=annotation_reader,
+            dataset=dataset,
+            filepath=filepath,
+            export_format=export_format,
+            include_unannotated_media=include_unannotated_media,
         )
-        if len(images) > 0:
-            annotation_client.upload_annotations_for_images(
-                images=images,
-            )
-        if len(videos) > 0:
-            are_videos_processed = False
-            start_time = time.time()
-            logging.info(
-                "Waiting for the Geti server to process all uploaded videos..."
-            )
-            while (not are_videos_processed) and (time.time() - start_time < 100):
-                # Ensure all uploaded videos are processed by the server
-                project_videos = video_client.get_all_videos()
-                uploaded_ids = {video.id for video in videos}
-                project_video_ids = {video.id for video in project_videos}
-                are_videos_processed = uploaded_ids.issubset(project_video_ids)
-                time.sleep(1)
-            annotation_client.upload_annotations_for_videos(
-                videos=videos,
-            )
 
-        configuration_file = os.path.join(target_folder, "configuration.json")
-        if os.path.isfile(configuration_file):
-            result = None
-            try:
-                result = configuration_client.apply_from_file(
-                    path_to_folder=target_folder
-                )
-            except GetiRequestException:
-                logging.warning(
-                    f"Attempted to set configuration according to the "
-                    f"'configuration.json' file in the project directory, but setting "
-                    f"the configuration failed. Probably the configuration specified "
-                    f"in '{configuration_file}' does "
-                    f"not apply to the default model for one of the tasks in the "
-                    f"project. Please make sure to reconfigure the models manually."
-                )
-            if result is None:
-                logging.warning(
-                    f"Not all configurable parameters could be set according to the "
-                    f"configuration in {configuration_file}. Please make sure to "
-                    f"verify model configuration manually."
-                )
-        configuration_client.set_project_auto_train(auto_train=enable_auto_train)
-        logging.info(f"Project '{project.name}' was uploaded successfully.")
-        return project
+    def import_dataset(
+        self, filepath: os.PathLike, project_name: str, project_type: str
+    ) -> Project:
+        """
+        Import a dataset from the zip archive specified by `filepath` to the Intel® Geti™ server.
+        A new project will be created from the dataset on the server with the name `project_name`.
+        Please set the `project_type` to determine the type of the project with one of possible values are:
+
+            * classification
+            * classification_hierarchical
+            * detection
+            * segmentation
+            * instance_segmentation
+            * anomaly_classification
+            * anomaly_detection
+            * anomaly_segmentation
+            * anomaly (choose this working with SaaS)
+            * detection_oriented
+            * detection_to_classification
+            * detection_to_segmentation
+
+        > Note: The dataset zip archive should be exported from the Geti™ server of the same version.
+
+        :param filepath: Path to the file to import the dataset from
+        :param project_name: Name of the project to create on the cluster
+        :param project_type: Type of the project, this determines which task the
+            project will perform.
+        :return: Project object, holding information obtained from the cluster
+            regarding the uploaded project.
+        """
+        return self.import_export_module.import_dataset_as_new_project(
+            filepath=filepath, project_name=project_name, project_type=project_type
+        )
 
     def create_single_task_project_from_dataset(
         self,
@@ -580,6 +596,7 @@ class Geti:
             * anomaly_classification
             * anomaly_detection
             * anomaly_segmentation
+            * anomaly (new task - anomaly classification)
             * instance_segmentation
             * rotated_detection
 
@@ -626,7 +643,7 @@ class Geti:
                 if criterion == "XOR":
                     multilabel = False
                 labels = generate_classification_labels(labels, multilabel=multilabel)
-            elif project_type == "anomaly_classification":
+            elif project_type == "anomaly_classification" or project_type == "anomaly":
                 labels = ["Normal", "Anomalous"]
 
         # Create project
@@ -696,10 +713,12 @@ class Geti:
             workspace_id=self.workspace_id,
             annotation_reader=annotation_reader,
         )
-        annotation_client.upload_annotations_for_images(images)
+        annotation_client.upload_annotations_for_images(images, max_threads=max_threads)
 
         if len(videos) > 0:
-            annotation_client.upload_annotations_for_videos(videos)
+            annotation_client.upload_annotations_for_videos(
+                videos, max_threads=max_threads
+            )
 
         configuration_client.set_project_auto_train(auto_train=enable_auto_train)
         return project
@@ -837,104 +856,18 @@ class Geti:
                     annotation_reader=reader,
                 )
                 annotation_client.upload_annotations_for_images(
-                    images=images, append_annotations=append_annotations
+                    images=images,
+                    append_annotations=append_annotations,
+                    max_threads=max_threads,
                 )
                 append_annotations = True
             previous_task_type = task_type
         configuration_client.set_project_auto_train(auto_train=enable_auto_train)
         return project
 
-    def download_all_projects(
-        self, target_folder: str, include_predictions: bool = True
-    ) -> List[Project]:
-        """
-        Download all projects in the workspace from the Intel® Geti™ server.
-
-        :param target_folder: Directory on local disk to download the project data to.
-            If not specified, this method will create a directory named 'projects' in
-            the current working directory.
-        :param include_predictions: True to also download the predictions for all
-            images and videos in the project, False to not download any predictions.
-            If this is set to True but the project has no trained models, downloading
-            predictions will be skipped.
-        :return: List of Project objects, each entry corresponding to one of the
-            projects found on the Intel® Geti™ server
-        """
-        # Obtain project details from cluster
-        projects = self.projects
-
-        # Validate or create target_folder
-        if target_folder is None:
-            target_folder = os.path.join(".", "projects")
-        os.makedirs(target_folder, exist_ok=True, mode=0o770)
-        logging.info(
-            f"Found {len(projects)} projects in the designated workspace on the "
-            f"Intel® Geti™ server. Commencing project download..."
-        )
-
-        # Download all found projects
-        with logging_redirect_tqdm(tqdm_class=tqdm):
-            for index, project in enumerate(
-                tqdm(projects, desc="Downloading projects")
-            ):
-                logging.info(
-                    f"Downloading project '{project.name}'... {index+1}/{len(projects)}."
-                )
-                self.download_project(
-                    project_name=project.name,
-                    target_folder=os.path.join(
-                        target_folder, get_project_folder_name(project)
-                    ),
-                    include_predictions=include_predictions,
-                )
-        return projects
-
-    def upload_all_projects(self, target_folder: str) -> List[Project]:
-        """
-        Upload all projects found in the directory `target_folder` on local disk to
-        the Intel® Geti™ server.
-
-        This method expects the directory `target_folder` to contain subfolders. Each
-        subfolder should correspond to the (previously downloaded) data for one
-        project. The method looks for project folders non-recursively, meaning that
-        only folders directly below the `target_folder` in the hierarchy are
-        considered to be uploaded as project.
-
-        :param target_folder: Directory on local disk to retrieve the project data from
-        :return: List of Project objects, each entry corresponding to one of the
-            projects uploaded to the Intel® Geti™ server.
-        """
-        candidate_project_folders = [
-            os.path.join(target_folder, subfolder)
-            for subfolder in os.listdir(target_folder)
-        ]
-        project_folders = [
-            folder
-            for folder in candidate_project_folders
-            if ProjectClient.is_project_dir(folder)
-        ]
-        logging.info(
-            f"Found {len(project_folders)} project data folders in the target "
-            f"directory '{target_folder}'. Commencing project upload..."
-        )
-        projects: List[Project] = []
-        with logging_redirect_tqdm(tqdm_class=tqdm):
-            for index, project_folder in enumerate(
-                tqdm(project_folders, desc="Uploading projects")
-            ):
-                logging.info(
-                    f"Uploading project from folder '{os.path.basename(project_folder)}'..."
-                    f" {index + 1}/{len(project_folders)}."
-                )
-                project = self.upload_project(
-                    target_folder=project_folder, enable_auto_train=False
-                )
-                projects.append(project)
-        return projects
-
     def upload_and_predict_media_folder(
         self,
-        project_name: str,
+        project: Project,
         media_folder: str,
         output_folder: Optional[str] = None,
         delete_after_prediction: bool = False,
@@ -943,7 +876,7 @@ class Geti:
     ) -> bool:
         """
         Upload a folder with media (images, videos or both) from local disk at path
-        `target_folder` to the project with name `project_name` on the Intel® Geti™
+        `target_folder` to the project provided with the `project` argument on the Intel® Geti™
         server.
         After the media upload is complete, predictions will be downloaded for all
         media in the folder. This method will create a 'predictions' directory in
@@ -953,7 +886,7 @@ class Geti:
         removed from the project on the Intel® Geti™ server after the predictions have
         been downloaded.
 
-        :param project_name: Name of the project to upload media to
+        :param project: Project object to upload the media to
         :param media_folder: Path to the folder to upload media from
         :param output_folder: Path to save the predictions to. If not specified, this
             method will create a folder named '<media_folder_name>_predictions' on
@@ -968,16 +901,6 @@ class Geti:
         :return: True if all media was uploaded, and predictions for all media were
             successfully downloaded. False otherwise
         """
-        # Obtain project details from cluster
-        try:
-            project = self.get_project(project_name=project_name)
-        except ValueError:
-            logging.info(
-                f"Project '{project_name}' was not found on the cluster. Aborting "
-                f"media upload."
-            )
-            return False
-
         # Upload images
         image_client = ImageClient(
             session=self.session, workspace_id=self.workspace_id, project=project
@@ -1003,7 +926,7 @@ class Geti:
         )
         if not prediction_client.ready_to_predict:
             logging.info(
-                f"Project '{project_name}' is not ready to make predictions, likely "
+                f"Project '{project.name}' is not ready to make predictions, likely "
                 f"because one of the tasks in the task chain does not have a "
                 f"trained model yet. Aborting prediction."
             )
@@ -1041,17 +964,17 @@ class Geti:
 
     def upload_and_predict_image(
         self,
-        project_name: str,
+        project: Project,
         image: Union[np.ndarray, Image, VideoFrame, str, os.PathLike],
         visualise_output: bool = True,
         delete_after_prediction: bool = False,
         dataset_name: Optional[str] = None,
     ) -> Tuple[Image, Prediction]:
         """
-        Upload a single image to a project named `project_name` on the Intel® Geti™
+        Upload a single image to a project on the Intel® Geti™
         server, and return a prediction for it.
 
-        :param project_name: Name of the project to upload the image to
+        :param project: Project object to upload the image to
         :param image: Image, numpy array representing an image, or filepath to an
             image to upload and get a prediction for
         :param visualise_output: True to show the resulting prediction, overlayed on
@@ -1065,8 +988,6 @@ class Geti:
             - Image object representing the image that was uploaded
             - Prediction for the image
         """
-        project = self.get_project(project_name=project_name)
-
         # Get the dataset to upload to
         dataset: Optional[Dataset] = None
         if dataset_name is not None:
@@ -1106,7 +1027,7 @@ class Geti:
         )
         if not prediction_client.ready_to_predict:
             raise ValueError(
-                f"Project '{project_name}' is not ready to make predictions. At least "
+                f"Project '{project.name}' is not ready to make predictions. At least "
                 f"one of the tasks in the task chain does not have any models trained."
             )
         prediction = prediction_client.get_image_prediction(uploaded_image)
@@ -1124,21 +1045,21 @@ class Geti:
 
     def upload_and_predict_video(
         self,
-        project_name: str,
+        project: Project,
         video: Union[Video, str, os.PathLike, Union[Sequence[np.ndarray], np.ndarray]],
         frame_stride: Optional[int] = None,
         visualise_output: bool = True,
         delete_after_prediction: bool = False,
     ) -> Tuple[Video, MediaList[VideoFrame], List[Prediction]]:
         """
-        Upload a single video to a project named `project_name` on the Intel® Geti™
+        Upload a single video to a project on the Intel® Geti™
         server, and return a list of predictions for the frames in the video.
 
         The parameter 'frame_stride' is used to control the stride for frame
         extraction. Predictions are only generated for the extracted frames. So to
         get predictions for all frames, `frame_stride=1` can be passed.
 
-        :param project_name: Name of the project to upload the image to
+        :param project: Project to upload the video to
         :param video: Video or filepath to a video to upload and get predictions for.
             Can also be a 4D numpy array or a list of 3D numpy arrays, shaped such
             that the array dimensions represent `frames x width x height x channels`,
@@ -1157,8 +1078,6 @@ class Geti:
               have been generated
             - List of Predictions for the Video
         """
-        project = self.get_project(project_name=project_name)
-
         # Upload the video
         video_client = VideoClient(
             session=self.session, workspace_id=self.workspace_id, project=project
@@ -1181,7 +1100,7 @@ class Geti:
         else:
             video_data = video
         if needs_upload:
-            logging.info(f"Uploading video to project '{project_name}'...")
+            logging.info(f"Uploading video to project '{project.name}'...")
             uploaded_video = video_client.upload_video(video=video_data)
         else:
             uploaded_video = video
@@ -1192,7 +1111,7 @@ class Geti:
         )
         if not prediction_client.ready_to_predict:
             raise ValueError(
-                f"Project '{project_name}' is not ready to make predictions. At least "
+                f"Project '{project.name}' is not ready to make predictions. At least "
                 f"one of the tasks in the task chain does not have any models trained."
             )
         if frame_stride is None:
@@ -1217,9 +1136,11 @@ class Geti:
 
     def deploy_project(
         self,
-        project_name: str,
+        project: Optional[Project] = None,
+        project_name: Optional[str] = None,
         output_folder: Optional[Union[str, os.PathLike]] = None,
         models: Optional[Sequence[BaseModel]] = None,
+        enable_explainable_ai: bool = False,
         prepare_ovms_config: bool = False,
     ) -> Deployment:
         """
@@ -1231,7 +1152,10 @@ class Geti:
         for each task in the project. However, it is possible to specify a particular
         model to use, by passing it in the list of `models` as input to this method.
 
-        :param project_name: Name of the project to deploy
+        :param project: Project object to deploy. Either `project` or `project_name`
+            must be specified.
+        :param project_name: Name of the project to deploy. Either `project` or
+            `project_name` must be specified.
         :param output_folder: Path to a folder on local disk to which the Deployment
             should be downloaded. If no path is specified, the deployment will not be
             saved.
@@ -1240,13 +1164,19 @@ class Geti:
             task no model is specified, the currently active model for that task will
             be used in the deployment. The order in which the models are passed does
             not matter
+        :param enable_explainable_ai: True to include an Explainable AI head in
+            the deployment. This will add an Explainable AI head to the model for each
+            task in the project, allowing for the generation of saliency maps.
         :param prepare_ovms_config: True to prepare the deployment to be hosted on a
             OpenVINO model server (OVMS). Passing True will create OVMS configuration
             files for the model(s) in the project and a README containing the steps to
             launch an OVMS container serving the models.
         :return: Deployment for the project
         """
-        project = self.get_project(project_name=project_name)
+        if project is None and project_name is None:
+            raise ValueError("Either `project` or `project_name` must be specified.")
+        if project is None:
+            project = self.project_client.get_project_by_name(project_name=project_name)
 
         deployment_client = self._deployment_clients.get(project.id, None)
         if deployment_client is None:
@@ -1259,6 +1189,7 @@ class Geti:
         deployment = deployment_client.deploy_project(
             output_folder=output_folder,
             models=models,
+            enable_explainable_ai=enable_explainable_ai,
             prepare_for_ovms=prepare_ovms_config,
         )
         return deployment

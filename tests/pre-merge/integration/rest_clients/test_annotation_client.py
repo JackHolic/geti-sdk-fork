@@ -88,7 +88,7 @@ class TestAnnotationClient:
         if fxt_test_mode != SdkTestMode.OFFLINE:
             time.sleep(1)
 
-        annotation_client.upload_annotations_for_video(video=video)
+        annotation_client.upload_annotations_for_video(video=video, max_threads=1)
 
         if fxt_test_mode != SdkTestMode.OFFLINE:
             time.sleep(1)
@@ -198,10 +198,12 @@ class TestAnnotationClient:
         annotation_client = fxt_project_service.annotation_client
         annotation_client.annotation_reader = annotation_reader
 
-        annotation_client.upload_annotations_for_videos(videos=[video_1, video_2])
+        annotation_client.upload_annotations_for_videos(
+            videos=[video_1, video_2], max_threads=1
+        )
 
         if fxt_test_mode != SdkTestMode.OFFLINE:
-            time.sleep(5)
+            time.sleep(10)
 
         #  Fetch annotations from annotation client
         annotation_scenes_for_video_1 = (

@@ -33,12 +33,12 @@ from geti_sdk.data_models import (
     Video,
 )
 from geti_sdk.deployment import Deployment
+from geti_sdk.prediction_visualization.visualizer import Visualizer
 from geti_sdk.rest_clients import ImageClient, ModelClient, TrainingClient, VideoClient
 from geti_sdk.rest_clients.prediction_client import PredictionClient
 from geti_sdk.utils.plot_helpers import (
     concat_prediction_results,
     pad_image_and_put_caption,
-    show_image_with_annotation_scene,
 )
 
 from .utils import get_system_info, load_benchmark_media, suppress_log_output
@@ -53,7 +53,7 @@ class Benchmarker:
     def __init__(
         self,
         geti: Geti,
-        project: Union[str, Project],
+        project: Project,
         precision_levels: Optional[Sequence[str]] = None,
         models: Optional[Sequence[Model]] = None,
         algorithms: Optional[Sequence[str]] = None,
@@ -83,7 +83,7 @@ class Benchmarker:
         be called after initialization.
 
         :param geti: Geti instance on which the project to use for benchmarking lives
-        :param project: Project or project name to use for the benchmarking. The
+        :param project: Project to use for the benchmarking. The
             project must exist on the specified Geti instance
         :param precision_levels: List of model precision levels to run the
             benchmarking for. Throughput will be measured for each precision level
@@ -111,11 +111,8 @@ class Benchmarker:
             on.
         """
         self.geti = geti
-        if isinstance(project, str):
-            project_name = project
-        else:
-            project_name = project.name
-        self.project = geti.get_project(project_name)
+        # Update project object to get the latest project details
+        self.project = self.geti.get_project(project_id=project.id)
         logging.info(
             f"Setting up Benchmarker for Intel® Geti™ project `{self.project.name}`."
         )
@@ -501,7 +498,7 @@ class Benchmarker:
                 output_folder = os.path.join(working_directory, f"deployment_{index}")
                 with suppress_log_output():
                     self.geti.deploy_project(
-                        project_name=self.project.name,
+                        project=self.project,
                         output_folder=output_folder,
                         models=opt_models,
                     )
@@ -859,6 +856,8 @@ class Benchmarker:
             with open(throughput_benchmark_results, "r") as results_file:
                 throughput_benchmark_results = list(csv.DictReader(results_file))
 
+        visualizer = Visualizer()
+
         # Performe inferece
         with logging_redirect_tqdm(tqdm_class=tqdm):
             results: List[List[np.ndarray]] = []
@@ -890,9 +889,7 @@ class Benchmarker:
                             f"failed. Inference failed with error: `{e}`"
                         )
                 if success:
-                    image_with_prediction = show_image_with_annotation_scene(
-                        image, prediction, show_results=False
-                    )
+                    image_with_prediction = visualizer.draw(image, prediction)
                     image_with_prediction = cv2.cvtColor(
                         image_with_prediction, cv2.COLOR_BGR2RGB
                     )
@@ -953,8 +950,8 @@ class Benchmarker:
         if include_online_prediction_for_active_model:
             logging.info("Predicting on the platform using the active model")
             online_prediction_result = self._predict_using_active_model(image)
-            image_with_prediction = show_image_with_annotation_scene(
-                image, online_prediction_result["prediction"], show_results=False
+            image_with_prediction = visualizer.draw(
+                image, online_prediction_result["prediction"]
             )
             image_with_prediction = cv2.cvtColor(
                 image_with_prediction, cv2.COLOR_BGR2RGB

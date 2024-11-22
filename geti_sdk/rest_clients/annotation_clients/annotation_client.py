@@ -14,9 +14,10 @@
 import logging
 from typing import Generic, List, Optional, Sequence, Union
 
+from requests import Response
+
 from geti_sdk.data_models import AnnotationScene, Image, Video, VideoFrame
 from geti_sdk.data_models.containers import MediaList
-from geti_sdk.http_session import GetiRequestException
 
 from .base_annotation_client import AnnotationReaderType, BaseAnnotationClient
 
@@ -37,21 +38,14 @@ class AnnotationClient(BaseAnnotationClient, Generic[AnnotationReaderType]):
         :return: List of AnnotationScene's, each entry corresponds to an
             AnnotationScene for a single frame in the video
         """
-        try:
-            response = self.session.get_rest_response(
-                url=f"{video.base_url}/annotations/latest",
-                method="GET",
-                include_organization_id=False,
-            )
-        except GetiRequestException as error:
-            if error.status_code == 204:
-                return []
-            else:
-                raise error
-        if self.session.version.is_sc_1_1 or self.session.version.is_sc_mvp:
-            annotations = response
-        else:
-            annotations = response["video_annotations"]
+        response = self.session.get_rest_response(
+            url=f"{video.base_url}/annotations/latest",
+            method="GET",
+            include_organization_id=False,
+        )
+        if type(response) is Response and response.status_code == 204:
+            return []
+        annotations = response["video_annotations"]
         annotation_scenes = [
             self.annotation_scene_from_rest_response(
                 annotation_scene, media_information=video.media_information
@@ -64,7 +58,7 @@ class AnnotationClient(BaseAnnotationClient, Generic[AnnotationReaderType]):
         return annotation_scenes
 
     def upload_annotations_for_video(
-        self, video: Video, append_annotations: bool = False
+        self, video: Video, append_annotations: bool = False, max_threads: int = 5
     ):
         """
         Upload annotations for a video. If append_annotations is set to True,
@@ -72,7 +66,11 @@ class AnnotationClient(BaseAnnotationClient, Generic[AnnotationReaderType]):
         project. If set to False, existing annotations will be overwritten.
 
         :param video: Video to upload annotations for
-        :param append_annotations:
+        :param append_annotations: True to append annotations from the local disk to
+            the existing annotations on the server, False to overwrite the server
+            annotations by those on the local disk.
+        :param max_threads: Maximum number of threads to use for uploading. Defaults to 5.
+            Set to -1 to use all available threads.
         :return:
         """
         annotation_filenames = self.annotation_reader.get_data_filenames()
@@ -89,12 +87,17 @@ class AnnotationClient(BaseAnnotationClient, Generic[AnnotationReaderType]):
             ]
         )
         upload_count = self._upload_annotations_for_2d_media_list(
-            media_list=video_frames, append_annotations=append_annotations
+            media_list=video_frames,
+            append_annotations=append_annotations,
+            max_threads=max_threads,
         )
         return upload_count
 
     def upload_annotations_for_videos(
-        self, videos: Sequence[Video], append_annotations: bool = False
+        self,
+        videos: Sequence[Video],
+        append_annotations: bool = False,
+        max_threads: int = 5,
     ):
         """
         Upload annotations for a list of videos. If append_annotations is set to True,
@@ -102,14 +105,20 @@ class AnnotationClient(BaseAnnotationClient, Generic[AnnotationReaderType]):
         project. If set to False, existing annotations will be overwritten.
 
         :param videos: List of videos to upload annotations for
-        :param append_annotations:
+        :param append_annotations: True to append annotations from the local disk to
+            the existing annotations on the server, False to overwrite the server
+            annotations by those on the local disk.
+        :param max_threads: Maximum number of threads to use for uploading. Defaults to 5.
+            Set to -1 to use all available threads.
         :return:
         """
         logging.info("Starting video annotation upload...")
         upload_count = 0
         for video in videos:
             upload_count += self.upload_annotations_for_video(
-                video=video, append_annotations=append_annotations
+                video=video,
+                append_annotations=append_annotations,
+                max_threads=max_threads,
             )
         if upload_count > 0:
             logging.info(
@@ -119,7 +128,10 @@ class AnnotationClient(BaseAnnotationClient, Generic[AnnotationReaderType]):
             logging.info("No new video frame annotations were found.")
 
     def upload_annotations_for_images(
-        self, images: Sequence[Image], append_annotations: bool = False
+        self,
+        images: Sequence[Image],
+        append_annotations: bool = False,
+        max_threads: int = 5,
     ):
         """
         Upload annotations for a list of images. If append_annotations is set to True,
@@ -127,12 +139,18 @@ class AnnotationClient(BaseAnnotationClient, Generic[AnnotationReaderType]):
         project. If set to False, existing annotations will be overwritten.
 
         :param images: List of images to upload annotations for
-        :param append_annotations:
+        :param append_annotations: True to append annotations from the local disk to
+            the existing annotations on the server, False to overwrite the server
+            annotations by those on the local disk.
+        :param max_threads: Maximum number of threads to use for uploading. Defaults to 5.
+            Set to -1 to use all available threads.
         :return:
         """
         logging.info("Starting image annotation upload...")
         upload_count = self._upload_annotations_for_2d_media_list(
-            media_list=images, append_annotations=append_annotations
+            media_list=images,
+            append_annotations=append_annotations,
+            max_threads=max_threads,
         )
         if upload_count > 0:
             logging.info(
@@ -277,7 +295,9 @@ class AnnotationClient(BaseAnnotationClient, Generic[AnnotationReaderType]):
                 max_threads=max_threads,
             )
 
-    def upload_annotations_for_all_media(self, append_annotations: bool = False):
+    def upload_annotations_for_all_media(
+        self, append_annotations: bool = False, max_threads: int = 5
+    ):
         """
         Upload annotations for all media in the project, If append_annotations is set
         to True, annotations will be appended to the existing annotations for the
@@ -286,16 +306,22 @@ class AnnotationClient(BaseAnnotationClient, Generic[AnnotationReaderType]):
         :param append_annotations: True to append annotations from the local disk to
             the existing annotations on the server, False to overwrite the server
             annotations by those on the local disk. Defaults to False.
+        :param max_threads: Maximum number of threads to use for uploading. Defaults to 5.
+            Set to -1 to use all available threads.
         """
         image_list = self._get_all_media_by_type(media_type=Image)
         video_list = self._get_all_media_by_type(media_type=Video)
         if len(image_list) > 0:
             self.upload_annotations_for_images(
-                images=image_list, append_annotations=append_annotations
+                images=image_list,
+                append_annotations=append_annotations,
+                max_threads=max_threads,
             )
         if len(video_list) > 0:
             self.upload_annotations_for_videos(
-                videos=video_list, append_annotations=append_annotations
+                videos=video_list,
+                append_annotations=append_annotations,
+                max_threads=max_threads,
             )
 
     def upload_annotation(
